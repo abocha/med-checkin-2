@@ -23,22 +23,24 @@ export const DEFAULT_SETTINGS = Object.freeze({
   eveningTime: '22:00',
   catchupHours: 4,
   repeatMinutes: 30,
-  treatmentChangeDate: '2026-07-07',
-  medicationLabel: 'Эсциталопрам 10 мг · Атомоксетин 80 мг',
   remindersPausedUntil: null
 });
 
-function clampScale(value, fallback = 5) {
+function normalizeScale(value, field, required) {
+  if (value === '' || value === null || value === undefined) {
+    if (required) throw new TypeError(`${field} is required`);
+    return null;
+  }
   const number = Number(value);
-  if (!Number.isFinite(number)) return fallback;
-  return Math.min(10, Math.max(0, Math.round(number * 10) / 10));
+  if (!Number.isFinite(number) || number < 0 || number > 10) throw new TypeError(`Invalid ${field}`);
+  return Math.round(number * 10) / 10;
 }
 
 function optionalHours(value) {
   if (value === '' || value === null || value === undefined) return null;
   const number = Number(value);
-  if (!Number.isFinite(number)) return null;
-  return Math.min(24, Math.max(0, Math.round(number * 10) / 10));
+  if (!Number.isFinite(number) || number < 0 || number > 24) throw new TypeError('Invalid sleep hours');
+  return Math.round(number * 10) / 10;
 }
 
 function normalizeFlags(values, allowed) {
@@ -53,18 +55,38 @@ function normalizeText(value, maxLength = 8000) {
 }
 
 function isLocalDate(value) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? ''));
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value ?? ''));
+  if (!match) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+function normalizeTimestamp(value, field, { nullable = false } = {}) {
+  if (value === null || value === undefined || value === '') {
+    if (nullable) return null;
+    throw new TypeError(`${field} is required`);
+  }
+  if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) throw new TypeError(`Invalid ${field}`);
+  return value;
 }
 
 export function normalizeCheckin(input = {}, now = new Date()) {
   if (!isLocalDate(input.localDate)) throw new TypeError('Invalid localDate');
-  if (!['13:00', '22:00'].includes(input.slot)) throw new TypeError('Invalid slot');
+
+  // Transitional support keeps existing 2.1 HTTP callers green until Task 2 changes the API.
+  const legacyPeriod = input.slot === '13:00' ? 'day' : input.slot === '22:00' ? 'evening' : null;
+  const kind = input.kind ?? (legacyPeriod ? 'scheduled' : null);
+  const period = input.period ?? legacyPeriod;
+  if (!['scheduled', 'extra'].includes(kind)) throw new TypeError('Invalid kind');
+  if (kind === 'scheduled' && !['day', 'evening'].includes(period)) throw new TypeError('Invalid period');
+  if (kind === 'extra' && period !== null) throw new TypeError('Extra period must be null');
 
   const normalized = {
+    kind,
     localDate: input.localDate,
-    slot: input.slot,
-    recordedAt: input.recordedAt || now.toISOString(),
-    updatedAt: now.toISOString(),
+    period,
+    scheduledFor: normalizeTimestamp(input.scheduledFor, 'scheduledFor', { nullable: true }),
+    observedAt: normalizeTimestamp(input.observedAt ?? (legacyPeriod ? (input.recordedAt ?? now.toISOString()) : null), 'observedAt'),
     nightSleepHours: optionalHours(input.nightSleepHours),
     daySleepHours: optionalHours(input.daySleepHours),
     sleepStart: /^\d{2}:\d{2}$/.test(input.sleepStart ?? '') ? input.sleepStart : null,
@@ -76,7 +98,15 @@ export function normalizeCheckin(input = {}, now = new Date()) {
     redFlags: normalizeText(input.redFlags)
   };
 
-  for (const field of SCALE_FIELDS) normalized[field] = clampScale(input[field]);
+  for (const field of SCALE_FIELDS) normalized[field] = normalizeScale(input[field], field, kind === 'scheduled');
+  if (kind === 'extra') {
+    const hasMeaningfulValue = SCALE_FIELDS.some((field) => normalized[field] !== null)
+      || normalized.nightSleepHours !== null || normalized.daySleepHours !== null
+      || normalized.sleepStart !== null || normalized.wakeTime !== null
+      || normalized.context.length > 0 || normalized.symptoms.length > 0 || normalized.activation.length > 0
+      || normalized.notes.length > 0 || normalized.redFlags.length > 0;
+    if (!hasMeaningfulValue) throw new TypeError('Extra must contain at least one meaningful value');
+  }
   return normalized;
 }
 
@@ -97,14 +127,12 @@ export function localDateString(date) {
 export function slotForTime(date, settings = DEFAULT_SETTINGS) {
   const day = parseTimeOnDate(date, settings.dayTime);
   const evening = parseTimeOnDate(date, settings.eveningTime);
-  const dayDistance = Math.abs(date.getTime() - day.getTime());
-  const eveningDistance = Math.abs(date.getTime() - evening.getTime());
-  return dayDistance <= eveningDistance ? '13:00' : '22:00';
+  return Math.abs(date.getTime() - day.getTime()) <= Math.abs(date.getTime() - evening.getTime()) ? '13:00' : '22:00';
 }
 
 export function scheduledWindows(date, settings = DEFAULT_SETTINGS) {
   return [
-    { slot: '13:00', scheduledAt: parseTimeOnDate(date, settings.dayTime) },
-    { slot: '22:00', scheduledAt: parseTimeOnDate(date, settings.eveningTime) }
+    { slot: '13:00', period: 'day', scheduledAt: parseTimeOnDate(date, settings.dayTime) },
+    { slot: '22:00', period: 'evening', scheduledAt: parseTimeOnDate(date, settings.eveningTime) }
   ];
 }

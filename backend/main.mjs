@@ -11,6 +11,7 @@ import { createProcessSupervisor } from './supervisor.mjs';
 import { backupDatabase } from './backups.mjs';
 import { terminateOwnedProcess } from './process-safety.mjs';
 import { createHostActionQueue } from './host-actions.mjs';
+import { prepareDatabase } from './migrations.mjs';
 
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const args = new Set(process.argv.slice(2));
@@ -93,6 +94,7 @@ if (args.has('--logon') || args.has('--show')) {
 if (args.has('--show') && await postRunning('show')) process.exit(0);
 if (existsSync(QUIT_FILE)) process.exit(0);
 
+prepareDatabase({ dbPath: DB_PATH, backupDir: BACKUP_DIR, log });
 const repo = createRepository(DB_PATH);
 const persistBackup = () => backupDatabase({ repo, dbPath: DB_PATH, backupDir: BACKUP_DIR });
 persistBackup();
