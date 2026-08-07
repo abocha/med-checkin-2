@@ -77,6 +77,16 @@ test('backup listing recognizes only app-created names and rejects corrupt or ne
     const db = new DatabaseSync(newer);
     try { db.exec('PRAGMA user_version = 2; CREATE TABLE checkins(id INTEGER);'); } finally { db.close(); }
     assert.throws(() => validateBackupFile(newer), /newer|version/i);
+
+    const incomplete = join(backupDir, 'manual-20260807T010207Z.sqlite');
+    const incompleteDb = new DatabaseSync(incomplete);
+    try {
+      incompleteDb.exec(`
+        PRAGMA user_version = 1;
+        CREATE TABLE checkins(id INTEGER PRIMARY KEY, kind TEXT, period TEXT);
+      `);
+    } finally { incompleteDb.close(); }
+    assert.throws(() => validateBackupFile(incomplete), /schema|settings|columns/i);
   } finally { repo.close(); rmSync(root, { recursive: true, force: true }); }
 });
 

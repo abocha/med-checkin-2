@@ -13,6 +13,17 @@ const PORTABLE_FORMAT = 'med-checkin-2';
 const PORTABLE_VERSION = 1;
 const PORTABLE_SETTINGS = ['dayTime', 'eveningTime', 'catchupHours', 'repeatMinutes'];
 const BACKUP_PATTERN = /^(?:med-checkin-(\d{4}-\d{2}-\d{2})|(?:manual|pre-migration|pre-restore|pre-import)-(\d{8}T\d{6}Z))\.sqlite$/;
+const V1_REQUIRED_COLUMNS = Object.freeze({
+  checkins: [
+    'id', 'kind', 'local_date', 'period', 'scheduled_for', 'observed_at', 'recorded_at', 'updated_at',
+    'mood', 'anxiety', 'irritability', 'energy', 'focus', 'functioning', 'sleep_quality', 'appetite',
+    'night_sleep_hours', 'day_sleep_hours', 'sleep_start', 'wake_time', 'context_json',
+    'symptoms_json', 'activation_json', 'notes', 'red_flags'
+  ],
+  settings: ['key', 'value_json'],
+  reminder_state: ['local_date', 'period', 'snoozed_until', 'dismissed_at', 'notified_at'],
+  treatment_events: ['id', 'effective_date', 'regimen_json', 'note', 'created_at', 'updated_at']
+});
 
 function backupSortKey(name) {
   const match = BACKUP_PATTERN.exec(name);
@@ -41,6 +52,15 @@ function tableColumns(db, table) {
   return new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
 }
 
+function validateV1Schema(db) {
+  for (const [table, requiredColumns] of Object.entries(V1_REQUIRED_COLUMNS)) {
+    const columns = tableColumns(db, table);
+    if (requiredColumns.some((column) => !columns.has(column))) {
+      throw new TypeError(`Unrecognized Med Check-in schema: incomplete ${table} table`);
+    }
+  }
+}
+
 export function validateBackupFile(path) {
   let db;
   try {
@@ -54,7 +74,7 @@ export function validateBackupFile(path) {
     if (!hasCheckins) throw new TypeError('Backup is not a recognized Med Check-in database');
     const columns = tableColumns(db, 'checkins');
     if (userVersion === 0 && !columns.has('slot')) throw new TypeError('Unrecognized legacy Med Check-in schema');
-    if (userVersion === 1 && (!columns.has('kind') || !columns.has('period'))) throw new TypeError('Unrecognized Med Check-in schema');
+    if (userVersion === 1) validateV1Schema(db);
     return { userVersion };
   } catch (error) {
     if (error instanceof TypeError) throw error;
