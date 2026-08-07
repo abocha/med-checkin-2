@@ -1,61 +1,54 @@
 # Med Check-in 2.2 Reliability Design
 
-**Status:** Approved design  
+**Status:** Approved, scope-trimmed design  
 **Date:** 2026-08-07  
 **Scope:** Personal-use Windows application, one user, one local data store
 
 ## Goal
 
-Med Check-in 2.2 makes observations truthful, recoverable, historically structured, and safe to evolve.
+Med Check-in 2.2 is a modest reliability upgrade. It should make observations truthful, recoverable, and easier to evolve without turning the app into a generalized health-data platform.
 
-The release is intentionally reliability-first. It does not replace the existing local Windows architecture or turn Med Check-in into a general health platform. It strengthens the current product around four concerns:
+The release focuses on things that should already feel native to a personal longitudinal tracker:
 
-1. observations must represent what was actually entered rather than plausible defaults;
-2. Day and Evening are semantic scheduled observations, not literal clock-time identifiers;
-3. treatment changes and ad-hoc observations must be representable without corrupting the standardized twice-daily series;
-4. future schema changes, restores, imports, and upgrades must have explicit data-safety behavior.
+1. Day and Evening are semantic scheduled observations, not literal clock-time identities.
+2. Extra observations can be recorded at any time without distorting the standardized twice-daily series.
+3. Missing measurements stay missing instead of being replaced with plausible defaults.
+4. Original record time, edit time, and observation time are distinct where the data genuinely supports that distinction.
+5. Treatment changes are stored as simple structured snapshots.
+6. Schema upgrades, backup restore, and JSON replacement import have straightforward recovery safeguards.
+7. The Windows app gets basic CI coverage.
 
-The application remains local-only, account-free, offline after installation, and optimized for a single person's longitudinal use.
+The application remains local-only, account-free, offline after installation, and optimized for one person's use.
 
-## Design principles
+## Scope discipline
 
-- **Truth over convenience.** Missing measurements stay missing. The backend must not manufacture fallback scale values.
-- **Semantic identity over presentation.** A scheduled observation is `day` or `evening`; reminder clock times are configuration.
-- **Keep standardized and ad-hoc data distinct.** Extras may enrich the timeline but do not silently change scheduled analytics.
-- **Server-owned audit timestamps.** The backend determines first-save and edit timestamps during ordinary app use.
-- **No invented history.** Migration preserves known facts and leaves unavailable historical facts null rather than reconstructing them from current settings.
-- **Safe evolution.** Structural changes run through ordered, transactional database migrations with recovery backups.
-- **Personal-use YAGNI.** No accounts, sharing, generalized medication databases, cloud abstractions, or multi-user permissions.
+2.2 should prefer the smallest implementation that satisfies the behavior below.
+
+- Do not add abstractions for hypothetical multi-user, cloud, synchronization, or distributed-data needs.
+- Do not build a general conflict-resolution or synchronization engine.
+- Do not add dependencies unless the existing platform cannot reasonably implement a required behavior.
+- Do not redesign the tray host, installer, frontend architecture, or repository layout unless a required 2.2 behavior cannot be implemented safely otherwise.
+- Reviewer suggestions that concern extremely rare hypothetical failures should not trigger architectural rewrites unless they expose a concrete, plausible data-loss/security path in this personal local app.
 
 ---
 
-## 1. Versioned database migrations
+## 1. Database migrations
 
-### 1.1 Schema versioning
+Use `PRAGMA user_version` for explicit schema versioning.
 
-Use `PRAGMA user_version` as the authoritative SQLite schema version.
+The existing 2.1.1 database is legacy version `0`; the 2.2 schema is version `1`.
 
-The existing Med Check-in 2.1.1 schema is recognized as legacy version `0`. New installations create the latest 2.2 schema directly and set the latest version. Existing installations run ordered migrations from the current version to the latest version.
-
-Migration code must be isolated from ordinary repository CRUD code. Each migration has one clear version transition and is independently testable.
-
-### 1.2 Migration safety
-
-Before the first migration that mutates an existing database:
+Before migrating an existing database:
 
 1. checkpoint WAL state;
-2. create a timestamped pre-migration SQLite backup outside the working database path;
-3. verify that the backup file exists and is readable;
-4. run the migration in a transaction where SQLite permits it;
-5. update `PRAGMA user_version` only after that migration succeeds.
+2. create a timestamped pre-migration SQLite backup;
+3. verify the backup exists;
+4. run the schema/data migration transactionally where SQLite permits;
+5. set `user_version = 1` only after success.
 
-If migration fails, application startup stops. The application must not continue against a partially upgraded schema.
+If migration fails, startup stops and the recovery-backup path is logged. A clean 2.2 install creates the latest schema directly.
 
-The failure must be logged with the migration version and the path of the recovery backup.
-
-### 1.3 New-install behavior
-
-A clean 2.2 install creates only the latest schema. It does not create 2.1.1 tables and migrate them forward as part of normal startup.
+Migration must preserve existing IDs, timestamps, measurements, sleep fields, flags, notes, red flags, settings that remain relevant, and reminder state.
 
 ---
 
@@ -63,135 +56,57 @@ A clean 2.2 install creates only the latest schema. It does not create 2.1.1 tab
 
 ### 2.1 Entry kinds
 
-Every observation has a `kind`:
+Every check-in is either:
 
-- `scheduled` — one of the two standardized daily observations;
-- `extra` — an ad-hoc observation recorded whenever useful.
+- `scheduled`
+- `extra`
 
-The UI labels the ad-hoc type simply **Extra**.
+Scheduled observations have `period = day | evening`. Extras have `period = null`.
 
-### 2.2 Scheduled periods
+There may be at most one scheduled Day and one scheduled Evening observation per `local_date`. Extras are unlimited.
 
-Scheduled observations use a semantic `period`:
+Keep the existing integer `id` primary key. 2.2 does **not** add UUID/stable synchronization keys.
 
-- `day`
-- `evening`
+### 2.2 Core fields
 
-`period` is null for Extra entries.
-
-There may be at most one scheduled Day and one scheduled Evening entry for a target local date. Enforce this with a partial unique index equivalent to:
-
-```sql
-UNIQUE(local_date, period) WHERE kind = 'scheduled'
-```
-
-Extras are unlimited and have no Day/Evening period.
-
-Database constraints must also reject impossible combinations such as `kind = 'extra'` with a Day/Evening period or `kind = 'scheduled'` with a null/unknown period.
-
-### 2.3 Check-in identity and stable import key
-
-Keep the existing integer `id` as the local database primary key and preserve it during the 2.1.1 migration.
-
-Add an immutable unique `record_key` string for every observation. New records receive an RFC 4122 UUID generated by the backend. Migrated 2.1.1 records receive UUIDs during migration.
-
-`record_key` exists to give JSON export/import a stable identity without relying on database-local integer IDs. It is not shown in the normal UI.
-
-### 2.4 Proposed observation fields
-
-The 2.2 observation table keeps the existing measurement, sleep, flag, note, and red-flag data and adds or changes the following concepts:
+The existing check-in table keeps its measurement/sleep/flag/note fields and gains or changes these concepts:
 
 ```text
-id             integer local primary key
-record_key     immutable unique UUID
+id             integer primary key
 kind           scheduled | extra
-local_date     target date for scheduled entries; observed local date for Extras
+local_date     target scheduled date, or observed local date for Extra
 period         day | evening | null
 scheduled_for  timestamp | null
-observed_at    timestamp | null for migrated legacy rows only
+observed_at    timestamp | null for migrated legacy rows
 recorded_at    timestamp
 updated_at     timestamp
 ```
 
-All eight core scale columns become nullable at the storage layer so Extras may contain only a subset of measurements. Application validation remains stricter for scheduled observations.
+All eight scale columns are nullable in storage because Extras may contain partial measurements. Validation is stricter for scheduled observations.
 
-Every non-null scale value must be within 0–10.
+### 2.3 Timestamp semantics
 
-New 2.2 writes require a non-null `observed_at`; null exists only to represent legacy history where a separate observation time was never stored.
+- `scheduled_for`: when a new scheduled observation was intended to occur. Snapshot the configured Day/Evening time when the scheduled record is created. Migrated legacy rows may remain null.
+- `observed_at`: when the described state was observed. New records require it. Extras default to now. Retrospective entries may use an earlier timestamp. Migrated 2.1.1 rows remain null because no distinct observation timestamp existed.
+- `recorded_at`: when the database first accepted the entry. Backend-generated and immutable during ordinary edits.
+- `updated_at`: timestamp of the latest successful ordinary edit.
 
-### 2.5 Timestamp semantics
+For a scheduled entry completed after midnight, `local_date` remains the target scheduled date even if `observed_at` falls on the following calendar date.
 
-These timestamps answer different questions and must not be conflated.
-
-#### `scheduled_for`
-
-When a scheduled observation was intended to occur.
-
-For a new 2.2 scheduled entry, snapshot the scheduled time derived from the target date and the Day/Evening reminder configuration at creation time. It must not later change merely because reminder settings change.
-
-For a manually added missed check-in, the UI defaults this value from the current corresponding schedule but allows it to be corrected before save when the historical schedule was different.
-
-For migrated 2.1.1 rows, `scheduled_for` is **null** unless the exact historical scheduled time is genuinely recoverable. The old literal slot identity (`13:00` or `22:00`) is not treated as proof that the configured reminder actually occurred at that time.
-
-#### `observed_at`
-
-When the state being described was observed.
-
-For an ordinary live scheduled check-in, it defaults to the first-save time. For an Extra, it defaults to now. For retrospective entries it may be set to an earlier time.
-
-For a scheduled entry completed after midnight, `local_date` remains the target scheduled date while `observed_at` may fall on the following calendar date.
-
-For Extras, `local_date` is derived from `observed_at` in local time.
-
-Med Check-in 2.1.1 did not store a separate observation timestamp. Migrated legacy rows therefore receive `observed_at = null`; migration must not pretend that a stored record/edit timestamp is definitely the original observation time.
-
-#### `recorded_at`
-
-When the database first accepted the entry.
-
-For ordinary 2.2 app use, the backend sets it on creation. Clients cannot set or overwrite it through normal create/update APIs. It is immutable after creation.
-
-Migration preserves the existing 2.1.1 value exactly as stored, even though older application behavior could not distinguish every historical edit as cleanly as 2.2 can.
-
-#### `updated_at`
-
-When the saved entry was most recently changed.
-
-For ordinary app use, the backend sets it on every successful save. On creation it equals `recorded_at`; on later edits only `updated_at` changes.
-
-Migration preserves the existing 2.1.1 value exactly as stored.
-
-The versioned JSON importer is a privileged portability path and may restore validated historical `recorded_at`/`updated_at` values as specified in Section 10; ordinary UI/API edits may not.
-
-### 2.6 2.1.1 slot and reminder-state migration
-
-Migrate existing observations as follows:
+### 2.4 Legacy mapping
 
 ```text
-slot = 13:00 -> kind = scheduled, period = day
-slot = 22:00 -> kind = scheduled, period = evening
+slot 13:00 -> scheduled/day
+slot 22:00 -> scheduled/evening
 ```
 
-Preserve existing integer IDs, existing `recorded_at`, existing `updated_at`, all measurements, sleep data, flags, notes, and red flags.
-
-Migrate reminder state using the same semantic mapping:
-
-```text
-13:00 reminder state -> day
-22:00 reminder state -> evening
-```
-
-Preserve stored `snoozed_until`, `dismissed_at`, and `notified_at` values.
-
-Do not reinterpret or overwrite historical timestamps merely to make them resemble the new model.
+Reminder state uses the same mapping. Do not invent historical `scheduled_for` or `observed_at` values from current settings or legacy slot labels.
 
 ---
 
-## 3. Validation and measurement capture
+## 3. Measurement capture and validation
 
-### 3.1 Core scales
-
-All eight existing core scales remain simple 0–10 scales:
+All eight core scales remain simple numeric **0-10** scales:
 
 - mood
 - anxiety
@@ -202,243 +117,111 @@ All eight existing core scales remain simple 0–10 scales:
 - sleep quality
 - appetite
 
-No scale gets a special alternate numeric range in 2.2.
+A new scheduled Day/Evening form starts with all eight genuinely unset. No frontend midpoint/default values and no backend fallback such as `5`.
 
-### 3.2 Scheduled observations
+A scheduled entry requires all eight valid scale values before save. Other fields remain optional.
 
-A new scheduled form begins with every core scale genuinely unset.
+An Extra may contain any subset of scales, flags, symptoms, activation flags, red flags, and note text. It must contain at least one meaningful value.
 
-The frontend must not prefill scale values such as mood 7, anxiety 1, or a neutral midpoint. The backend must not silently substitute `5` or any other fallback for a missing or invalid scale.
+Provide explicit **Use previous values** for scheduled entries. It copies only the eight scale values from the previous saved scheduled observation; nothing is copied automatically.
 
-A scheduled Day or Evening entry may be saved only when all eight core scales contain valid 0–10 values.
-
-Sleep fields, context flags, symptoms, activation flags, notes, and red flags remain optional.
-
-### 3.3 Use previous values
-
-Provide an explicit **Use previous values** action for scheduled forms.
-
-It copies only the eight scale values from the immediately preceding saved scheduled observation in chronological order into the current form. It is an intentional user action, not an automatic default. The copied values may then be edited normally.
-
-Do not automatically copy sleep data, flags, notes, or red flags.
-
-### 3.4 Scale anchors
-
-Each 0–10 scale displays stable endpoint guidance so the meaning remains consistent over time. The exact concise Russian wording may differ by scale, but the direction must be unambiguous.
-
-The numeric storage remains 0–10 for every scale.
-
-### 3.5 Extra observations
-
-An Extra may contain any subset of:
-
-- 0–10 scale values;
-- context flags;
-- symptoms;
-- activation flags;
-- red flags;
-- note text.
-
-An Extra does not require all eight scales.
-
-At least one meaningful field must be present. An entirely empty Extra is rejected.
-
-Extras never satisfy or clear a scheduled Day/Evening reminder.
+Each scale shows concise stable endpoint guidance, while storage remains 0-10.
 
 ---
 
-## 4. Drafts and unsaved-change protection
+## 4. Drafts and unsaved changes
 
-### 4.1 Dirty state
-
-Any unsaved modification marks the active form dirty.
-
-Before an app-controlled action would discard dirty state, including switching Day/Evening, switching to another entry, navigating to another view, or using the app's Close action, the UI must offer an explicit choice equivalent to:
-
-- Save
-- Discard
-- Cancel
-
-Save is offered only when the current form is valid enough to save. Invalid forms must not be coerced into valid data.
-
-For native browser/window closure where a custom asynchronous modal cannot be guaranteed, use the browser's supported unload warning as a best-effort guard. Draft persistence remains the authoritative crash/forced-close recovery mechanism.
-
-### 4.2 Local drafts
-
-Persist unfinished form state in the local browser profile's `localStorage`; do not create database observations before the user explicitly saves.
+Persist unfinished forms in browser `localStorage`.
 
 Draft identity:
 
-- scheduled: target `local_date + period`;
-- new Extra: generated draft key;
-- existing saved entry being edited: its `record_key`.
+- scheduled: `local_date + period`;
+- new Extra: generated local draft key;
+- existing saved entry: integer check-in `id`.
 
-Drafts are local-only and are removed after a successful save or explicit discard.
+Any unsaved edit marks the form dirty. App-controlled navigation that would discard it should offer Save / Discard / Cancel where possible. Native window closure may use the browser unload warning as best effort; the local draft is the actual crash/forced-close recovery mechanism.
 
-When a matching draft is discovered later, restoration is explicit rather than automatic:
-
-```text
-Unfinished draft from 22:14
-Restore | Discard
-```
-
-The UI shows the draft age so stale data is recognizable.
+When a draft is found later, show explicit Restore / Discard rather than silently restoring it. Successful save or explicit discard removes the draft.
 
 ---
 
-## 5. Missed check-ins and Extra entry flow
+## 5. Entry flows
 
-### 5.1 Primary entry choices
-
-The normal capture surface exposes three semantic choices:
+The capture UI exposes:
 
 ```text
-Day       scheduled, one per target date
-Evening   scheduled, one per target date
-Extra     ad hoc, unlimited
+Day
+Evening
+Extra
 ```
 
-Day and Evening display the current configured schedule beside the label, for example `Day · 12:30` and `Evening · 21:45`, without using those clock values as database identity.
+Day/Evening show the configured reminder clock time beside the semantic label, but the time is not record identity.
 
-### 5.2 Add missed check-in
+History provides **Add missed check-in**. It asks for target date, Day/Evening, observation datetime, and scheduled datetime (defaulted from current corresponding schedule but editable). Duplicate scheduled identity opens/offers the existing entry instead of overwriting it.
 
-History provides **Add missed check-in**.
-
-The flow asks for:
-
-- target date;
-- Day or Evening;
-- observation date/time;
-- scheduled time, defaulted from the current corresponding schedule and editable when necessary.
-
-If that target date already has the chosen scheduled period, the app rejects creation and offers to open the existing entry instead.
-
-A missed scheduled check-in remains a scheduled observation and participates in scheduled analytics.
-
-### 5.3 Extra flow
-
-Extra defaults `observed_at` to now and allows it to be edited for retrospective recording.
-
-The Extra form is deliberately lighter than a scheduled check-in and does not force completion of all scales or sleep fields.
+Extra defaults `observed_at` to now and allows retrospective editing.
 
 ---
 
-## 6. Structured treatment history
+## 6. Treatment history
 
-### 6.1 Replace single treatment settings
-
-The existing single `treatmentChangeDate` and free-text `medicationLabel` cease to be authoritative treatment history.
-
-Replace them with structured regimen snapshots.
-
-### 6.2 Treatment events
-
-Each treatment event represents the complete known regimen effective from a point in time, rather than only a delta from the previous event.
-
-Suggested structure:
+Replace the single `treatmentChangeDate` and `medicationLabel` settings with one simple treatment-events table.
 
 ```text
 treatment_events
   id
-  effective_date     nullable only for baseline
+  effective_date   nullable only for baseline
+  regimen_json     JSON array of medication snapshots
   note
   created_at
   updated_at
-
-treatment_event_items
-  id
-  event_id
-  medication_name
-  dose_value
-  dose_unit
-  timing             optional free text
-  sort_order
 ```
 
-A treatment event must contain at least one medication item.
+Each `regimen_json` item contains:
 
-Medication names, units, and timing are human-entered strings. Med Check-in does not use an external drug database or standardized pharmaceutical identifiers.
+```text
+name
+amount
+unit
+timing?   optional free text
+```
 
-Dose values must be finite and non-negative.
+No separate medication-items table is required in 2.2. The app does not need SQL queries by medication identity, and JSON keeps this personal-use model much smaller.
 
-Treatment-event `created_at` and `updated_at` follow the same ordinary server-owned timestamp principle as observations.
+A full regimen snapshot is stored at each treatment event. An empty regimen array is allowed to represent no active medication.
 
-### 6.3 Baseline and dated events
+Allow at most one undated baseline and at most one dated snapshot per `effective_date`.
 
-Allow at most one undated baseline event. Its meaning is:
+Known-history seed:
 
-> known regimen before the first dated treatment event
-
-It does not claim an invented start date.
-
-Allow at most one regimen snapshot per `effective_date`. A same-day regimen correction edits that event rather than creating ambiguous ordering between two daily snapshots.
-
-### 6.4 Known-history backfill
-
-For this personal-use installation, migration seeds the known history already established for the application:
-
-Baseline before the dated change:
-
+**Undated baseline before the dated change**
 - Escitalopram 20 mg
 - Atomoxetine 80 mg
 
-From 2026-07-07:
-
+**From 2026-07-07**
 - Escitalopram 10 mg
 - Atomoxetine 80 mg
 
-The baseline remains undated rather than inventing when that regimen originally began.
-
-This seed is part of this personal application's migration, not a general medication-database feature.
-
-### 6.5 Treatment UI
-
-Settings gains a dedicated **Treatment** section showing:
-
-- current regimen;
-- chronological treatment events;
-- Add change;
-- Edit;
-- Delete with confirmation.
-
-Adding a dated change prefills the regimen currently effective immediately before that date. A typical dose change therefore requires editing only the changed value.
-
-The application header derives its medication label from the regimen currently effective today. If no treatment history exists, it shows no medication label rather than a hardcoded fallback.
-
-Editing or deleting treatment events never mutates historical check-in rows.
+Settings gains a Treatment section with current regimen, chronological events, Add/Edit/Delete. Adding a new dated event pre-fills the regimen effective immediately before that date. The header label derives from today's effective regimen.
 
 ---
 
 ## 7. History
 
-### 7.1 Complete navigation
+History must no longer stop at the latest 200 rows.
 
-Remove the frontend assumption that history is effectively limited to the latest 200 records.
+Provide:
 
-Expose the existing or equivalent backend pagination/range capabilities through:
-
-- 7 days;
-- 30 days;
-- 90 days;
-- All;
+- 7 days / 30 days / 90 days / All;
 - custom from/to dates;
-- incremental loading or pagination.
+- Day / Evening / Extra filter;
+- pagination or incremental loading;
+- Add missed check-in;
+- Extra.
 
-### 7.2 Filters
+Do not add additional note/symptom/red-flag filter systems in 2.2 unless they fall out nearly for free from existing code.
 
-History supports filters for:
-
-- Day;
-- Evening;
-- Extra;
-- entries with notes;
-- entries with symptoms;
-- entries with activation flags;
-- entries with red flags.
-
-### 7.3 Timing display
-
-Scheduled example:
+Display real timing without inventing missing legacy values. Example:
 
 ```text
 Aug 7
@@ -446,31 +229,13 @@ Evening · scheduled 22:00
 Recorded 22:17 · edited 22:24
 ```
 
-If `scheduled_for` is unavailable on a migrated legacy row, omit the scheduled clock value rather than deriving one from today's settings.
-
-If `observed_at` is available and materially differs from `recorded_at`, show it as an additional line/value. Do not manufacture an observation time for legacy rows where it is null.
-
-Extra example:
-
-```text
-Aug 8
-Extra · observed 02:07
-Recorded 02:09
-```
-
-If `updated_at == recorded_at`, omit the redundant edited time.
-
-### 7.4 Treatment events in chronology
-
-History may display treatment changes in the same chronological timeline as visually distinct event cards or separators.
-
-Treatment events are not check-ins and must not be returned as ordinary observations by the check-in collection API.
+Show `observed_at` separately when useful and known. Extras show their observation time. Treatment changes may appear as visually distinct timeline separators/cards, but they remain separate records from check-ins.
 
 ---
 
 ## 8. Reminders
 
-Reminder configuration remains conceptually:
+Keep existing reminder settings:
 
 ```text
 dayTime
@@ -480,413 +245,182 @@ repeatMinutes
 remindersPausedUntil
 ```
 
-### 8.1 Semantic completion
+Saving Day clears only Day reminder state. Saving Evening clears only Evening. Saving Extra clears neither.
 
-A saved scheduled Day entry clears only that Day reminder state. A saved scheduled Evening entry clears only that Evening reminder state.
+Visible snooze/repeat wording and behavior must use configured `repeatMinutes`, not a hardcoded 30 minutes.
 
-Saving an Extra clears neither.
-
-### 8.2 Configurable visible actions
-
-Visible reminder actions must derive their wording and behavior from settings.
-
-If `repeatMinutes = 45`, the snooze/repeat action must say the equivalent of **Remind me in 45 minutes** and send/use 45 minutes. Remove the current hardcoded 30-minute mismatch.
-
-### 8.3 Pause state
-
-While reminders are paused, show persistent visible status with the resume action until the pause expires or is manually cleared. Do not communicate pause state only through a temporary toast.
+While reminders are paused, show persistent visible status with Resume until the pause expires or is cleared.
 
 ---
 
-## 9. Analytics
+## 9. Lean analytics changes
 
-### 9.1 Standardized dataset
+2.2 keeps analytics deliberately modest.
 
-Default analytics use only `kind = scheduled` observations.
+Required changes:
 
-Extras may appear as timeline markers and expose their note/flags/optional values when inspected, but they do not contribute to:
+- scheduled observations only contribute to existing averages/trends/comparisons;
+- Extras do not affect scheduled analytics or completion;
+- replace centered three-day smoothing with a trailing three-calendar-day mean;
+- missing measurements remain missing;
+- add simple scheduled completion statistics;
+- draw dated treatment-change markers on the existing trend chart.
 
-- scheduled daily averages;
-- Day-vs-Evening comparisons;
-- rolling trends;
-- completion rates;
-- treatment-period scheduled comparisons.
+For each metric, the daily value is the average of available Day/Evening scheduled values for that local date. A trailing point uses that date plus the previous two calendar dates, ignoring missing daily values inside the window but never reaching farther back.
 
-This prevents days with many Extras from receiving disproportionate statistical weight.
+Completion denominator includes past Day/Evening opportunities. On the current date, a period counts once its configured time has passed or if it was completed early. Extras never count.
 
-### 9.2 Date controls
+### Explicit analytics deferrals
 
-Analytics adds:
+2.2 does **not** need:
 
-- 7 days;
-- 30 days;
-- 90 days;
-- All;
-- custom range;
-- Since latest treatment change.
+- all-eight-metric chart toggles;
+- a generic treatment-event comparison engine;
+- selectable "first seven days vs later" comparisons;
+- Extra-value overlays inside normal trend calculations;
+- new statistical or causal-analysis features.
 
-When treatment history contains multiple dated events, the UI also allows choosing a specific treatment event for event-centered comparison.
-
-### 9.3 Metric controls
-
-Allow toggling all eight 0–10 scales on trend charts rather than permanently privileging a subset.
-
-Missing measurements remain missing. Analytics must not fill them with neutral/default values.
-
-### 9.4 Daily values and trailing smoothing
-
-For each metric, a daily value is the average of the available scheduled Day and Evening values for that `local_date`. If neither exists, that date has no daily value.
-
-Replace the current centered three-day smoothing window with a trailing calendar window covering the current date and the previous two calendar dates only.
-
-The smoothed point is the average of the non-null daily values inside that fixed three-calendar-day window. A missing date is ignored inside the window, but the algorithm must **not** reach farther back to pull in an older observation as a replacement.
-
-Future observations therefore cannot retroactively change an earlier day's smoothed value.
-
-### 9.5 Completion statistics
-
-Show scheduled completion over the selected date range, including:
-
-- completed scheduled observations / expected scheduled observations;
-- overall percentage;
-- Day percentage;
-- Evening percentage.
-
-Extras do not count toward numerator or denominator.
-
-Expected opportunities are defined as follows:
-
-- each past local date in the selected range expects both Day and Evening;
-- future local dates are excluded;
-- on the current local date, a period enters the denominator when its configured scheduled time has passed **or** that period has already been completed early.
-
-This avoids marking the not-yet-due Evening check-in as missed while also preventing an early completion from producing a completion rate above 100%.
-
-### 9.6 Treatment markers and comparison
-
-Draw dated treatment events as markers on time-series charts.
-
-For a selected treatment event, define **first seven days** as the effective date through `effective_date + 6 calendar days`, inclusive. Missing check-ins do not extend or compress this window. The subsequent period begins on `effective_date + 7 days` and runs through the selected analysis end date or the next comparison boundary chosen by the UI.
-
-Compare scheduled observations only.
-
-Retain clear language that descriptive differences do not establish causation.
-
-The undated baseline is contextual treatment state, not a chart marker at an invented date.
+Remove or simplify the existing single-treatment `first 7 vs later` UI rather than generalizing it.
 
 ---
 
-## 10. Backup, restore, and JSON portability
+## 10. Backup, restore, and JSON replacement import
 
-### 10.1 Automatic backups
+### 10.1 SQLite backups
 
-Keep automatic daily SQLite backups. Existing automatic retention may remain 30 days.
+Keep automatic daily SQLite backups and existing retention.
 
-### 10.2 Manual backup
+Add **Create backup now** and **Open data folder**.
 
-Add **Create backup now**.
+Add **Restore backup...** for recognized app-created SQLite backups.
 
-A manual backup:
+Restore safety invariants:
 
-1. checkpoints WAL state;
-2. creates a timestamped SQLite copy;
-3. verifies the file exists;
-4. reports its path/name on success.
+1. validate the selected file as readable SQLite and a recognized Med Check-in schema;
+2. create a pre-restore backup of the current database;
+3. close/checkpoint the live repository before replacement;
+4. replace and restart/reopen cleanly;
+5. if replacement/migration fails, leave the pre-restore copy available and do not silently continue with ambiguous state.
 
-Manual backups are not deleted by the automatic 30-day pruning policy.
+Use the simplest restart-safe implementation that satisfies these invariants. 2.2 does not require a generalized recovery-state machine, elaborate retry protocol, or quarantine subsystem.
 
-### 10.3 Open data folder
+### 10.2 JSON export/import
 
-Add **Open data folder** using the existing local host-control mechanism rather than exposing arbitrary filesystem paths through the browser.
+The existing JSON export becomes a small versioned portability format containing:
 
-### 10.4 Restore backup
-
-Add **Restore backup…** listing recognized automatic and manual backups with creation timestamp and file size.
-
-Before replacement, restoration must:
-
-1. create a new pre-restore backup of the current database;
-2. verify the selected file is readable SQLite;
-3. run `PRAGMA integrity_check` or an equivalent integrity validation;
-4. verify it has a recognized Med Check-in schema version or recognizable 2.1.1 legacy schema;
-5. reject unsupported newer schemas before mutation.
-
-The repository/database connection must be closed before replacing the working SQLite files. Restoration then performs a controlled backend restart/reopen. If an older supported schema is restored, normal migration runs before the application resumes.
-
-A failed restore must leave the pre-restore database recoverable and must not silently continue with an ambiguous database state.
-
-### 10.5 JSON export format
-
-The 2.2 JSON export becomes a versioned portability format containing at minimum:
-
-- export format version;
+- format version;
 - exported timestamp;
-- observations with `record_key`;
-- treatment events/items;
-- user settings relevant to interpretation and reminders.
+- observations;
+- treatment events;
+- portable reminder/settings values.
 
-Transient runtime data such as bearer tokens is never exported.
+Runtime tokens, paths, and transient reminder notification state are not exported.
 
-Reminder notification state does not need to be part of the portability format; SQLite backup remains the exact-state recovery mechanism.
+**Import JSON...** supports only this app's 2.2+ format and only **Replace** semantics.
 
-### 10.6 JSON import preview
+Before replacement:
 
-**Import JSON…** supports only the app's versioned 2.2+ export format in this release.
+1. fully validate the file;
+2. show a preview with observation count, Extra count, treatment-event count, date range, and format version;
+3. create a pre-import SQLite backup;
+4. require explicit Replace confirmation.
 
-Before any Merge or Replace mutation, create a full SQLite pre-import safety backup and validate the complete input.
+Replace transactionally clears/recreates portable observations, treatment history, and portable settings. Valid source IDs/timestamps may be preserved because the destination portable dataset is being replaced wholesale.
 
-Preview:
+There is **no JSON Merge mode, conflict resolution, UUID identity layer, or synchronization behavior in 2.2**.
 
-- observation count;
-- Extra count;
-- treatment-event count;
-- date range;
-- detected conflicts/warnings;
-- source export version.
-
-Malformed or incompatible files are rejected before any database mutation.
-
-### 10.7 Merge semantics
-
-Merge is deterministic and keyed by stable identities.
-
-For observations:
-
-- an unknown `record_key` is inserted, preserving validated source `recorded_at` and `updated_at` through the privileged importer;
-- for a known `record_key`, the local immutable `recorded_at` remains unchanged;
-- if the imported `updated_at` is newer than the local `updated_at`, imported mutable observation content wins and the imported `updated_at` is preserved;
-- if the local `updated_at` is newer, the local record wins;
-- if timestamps are equal but mutable content differs, reject the merge as an ambiguous conflict rather than guessing;
-- after applying the prospective merge in memory/transaction, scheduled uniqueness is revalidated; if two different record keys would occupy the same `(local_date, period)`, reject the import and report the conflict.
-
-For treatment events:
-
-- the undated baseline is one logical identity;
-- each dated event is identified by `effective_date`;
-- when the same identity exists on both sides, the newer `updated_at` wins;
-- equal timestamps with different regimen content are reported as an ambiguous conflict and reject the merge.
-
-Portable settings from the import are shown in preview and imported values win only after the user confirms Merge.
-
-The entire Merge is transactional. Any validation/conflict failure rolls it back completely.
-
-### 10.8 Replace semantics
-
-Replace means replacing the portable application data represented by the JSON export, not raw SQLite files.
-
-After the pre-import safety backup and complete validation, transactionally replace observations, treatment history, and portable settings.
-
-For Replace, the privileged importer preserves validated source `record_key`, `recorded_at`, `updated_at`, `observed_at`, and `scheduled_for` values exactly, including null legacy observation/schedule timestamps where allowed by the export format.
-
-Runtime secrets and installation-specific paths remain local.
-
-### 10.9 v1 import
-
-Importing Med Check-in v1 data is explicitly out of scope for 2.2.
-
-The 2.2 schema should remain a clean future destination: a later importer can generate `record_key` values, map old standardized records to Day/Evening where justified, preserve original timestamps where available, and add historical treatment context without requiring legacy-only columns in the live schema.
+Med Check-in v1 import remains out of scope.
 
 ---
 
 ## 11. Failure behavior
 
-The general rule is: **reject questionable writes instead of silently repairing them into plausible data.**
+Reject questionable writes rather than silently repairing them.
 
-Reject without partial mutation:
+Examples:
 
-- missing required scheduled scales;
-- non-finite or out-of-range scale values;
+- missing scheduled scales;
+- invalid scale ranges;
 - malformed dates/timestamps;
-- invalid entry kinds;
-- invalid Day/Evening periods;
+- invalid kind/period combinations;
 - duplicate scheduled identities;
 - empty Extras;
-- malformed treatment events;
-- multiple baselines;
-- duplicate dated treatment snapshots;
-- incompatible restores;
-- invalid or conflicting JSON imports;
-- failed schema migrations.
+- malformed treatment snapshots;
+- duplicate treatment dates/baselines;
+- incompatible restore files;
+- invalid JSON replacement imports;
+- failed migrations.
 
-Normal interactive create/update APIs use backend-generated audit timestamps. Only the validated, versioned portability importer may restore historical audit timestamps from an export.
-
-Multi-step persistent operations must be transactional where possible and otherwise have an explicit recoverable pre-operation backup plus controlled restart behavior.
-
-Errors presented to the user should identify the failed operation and preserve enough detail in local logs for diagnosis without displaying internal stack traces in ordinary UI.
+Persistent multi-step operations should be transactional where practical and otherwise protected by an explicit pre-operation backup.
 
 ---
 
-## 12. Windows CI and verification
+## 12. Windows CI
 
-Add GitHub Actions CI on `windows-latest`, because Windows is the supported product platform.
+Add a small GitHub Actions workflow on `windows-latest`.
 
-At minimum CI runs:
-
-- `npm test`;
-- JavaScript syntax checks used by release verification;
-- package/layout verification;
-- Windows-specific path behavior tests;
-- release archive verification where it does not require an interactive desktop session.
-
-Do not build an elaborate deployment pipeline. The purpose is simply to catch regressions on the platform the application actually runs on.
+It should run the repository's normal tests and Windows packaging/release verification. No deployment/release pipeline is needed.
 
 ---
 
-## 13. Required test coverage
+## 13. Test priorities
 
-Extend the current test suite rather than replacing it.
+Extend the existing suite with focused tests for:
 
-### 13.1 Migration fixture
+- real 2.1.1 -> 2.2 migration using a synthetic fixture;
+- Day/Evening mapping and reminder-state preservation;
+- preservation of existing IDs/timestamps/data;
+- null legacy `observed_at`/`scheduled_for`;
+- strict scheduled scale validation;
+- multiple Extras and empty-Extra rejection;
+- immutable `recorded_at` / changing `updated_at`;
+- drafts and cleanup;
+- treatment baseline/dates/effective-regimen resolution;
+- Extras excluded from reminders and scheduled analytics;
+- trailing smoothing and completion denominator;
+- backup validation and pre-restore backup;
+- JSON export versioning, preview, Replace, and invalid-input rejection;
+- Windows package/layout verification.
 
-Commit a small **synthetic** 2.1.1 SQLite fixture containing representative:
-
-- Day/Evening legacy rows;
-- all scale fields;
-- sleep fields;
-- notes and red flags;
-- context/symptom/activation flags;
-- reminder states;
-- settings.
-
-Do not commit a copy of real personal health data.
-
-Migration tests must verify:
-
-- `13:00 -> day`;
-- `22:00 -> evening`;
-- reminder-state `13:00 -> day` and `22:00 -> evening`;
-- integer IDs preserved;
-- `recorded_at` preserved;
-- `updated_at` preserved;
-- all existing observation fields preserved;
-- new stable record keys assigned;
-- legacy `observed_at` remains null rather than fabricated;
-- unavailable historical `scheduled_for` remains null;
-- schema version advances only after successful migration.
-
-### 13.2 Observation tests
-
-Cover:
-
-- scheduled Day creation;
-- scheduled Evening creation;
-- multiple Extras on one date;
-- Extra containing note only;
-- Extra containing partial scales;
-- rejection of an empty Extra;
-- rejection of missing scheduled scales;
-- rejection of duplicate Day/Evening identity;
-- immutable `recorded_at` under ordinary edits;
-- changing `updated_at` under ordinary edits;
-- retrospective `observed_at`;
-- scheduled check-in completed after midnight retaining its target `local_date`;
-- `scheduled_for` snapshot behavior for new scheduled records.
-
-### 13.3 Draft tests
-
-Cover draft identity and restore/discard behavior for:
-
-- new scheduled entry;
-- new Extra;
-- editing an existing record;
-- successful save cleanup;
-- explicit discard cleanup.
-
-### 13.4 Treatment tests
-
-Cover:
-
-- single undated baseline;
-- one dated regimen snapshot per date;
-- resolving the regimen effective on a date;
-- prefilling a new change from the previous effective regimen;
-- editing/deleting treatment events;
-- current header regimen;
-- known baseline and 2026-07-07 migration seed.
-
-### 13.5 Reminder tests
-
-Cover:
-
-- Day completion clears Day only;
-- Evening completion clears Evening only;
-- Extra clears neither;
-- configurable repeat/snooze interval is used in both logic and UI data;
-- paused reminder state and resumption.
-
-### 13.6 Analytics tests
-
-Cover:
-
-- Extras excluded from scheduled averages;
-- Extras excluded from completion rates;
-- treatment markers;
-- exact seven-calendar-day event window;
-- trailing fixed-calendar-window three-day mean;
-- missing measurements remain missing;
-- missing days do not cause smoothing to reach farther back;
-- Day/Evening completion calculations;
-- current-day not-yet-due denominator behavior;
-- early completion cannot produce more than 100% completion;
-- future observations do not alter historical trailing means.
-
-### 13.7 Backup/import tests
-
-Cover:
-
-- valid backup recognition;
-- SQLite integrity/schema validation;
-- unsupported-newer-schema rejection;
-- pre-restore safety backup;
-- failed restore recovery;
-- JSON export versioning;
-- pre-import safety backup;
-- import preview;
-- Merge by `record_key` and `updated_at`;
-- ambiguous equal-timestamp conflict rejection;
-- scheduled-identity conflict rejection;
-- treatment-date conflict handling;
-- Replace preserving portable timestamps;
-- malformed import rejection before mutation.
+Do not build large combinatorial test matrices for highly theoretical states unless a real implementation path makes them plausible.
 
 ---
 
-## 14. Explicit non-goals for 2.2
+## 14. Non-goals
 
-2.2 does **not** include:
+2.2 does not include:
 
-- Med Check-in v1 import;
-- cloud synchronization;
-- accounts or multi-user support;
-- sharing or collaboration;
-- a mobile application;
-- remote web hosting;
-- AI-generated summaries or medical recommendations;
-- medication interaction checking;
-- external drug databases;
-- standardized medication identifiers;
-- full revision/audit history for every historical edit;
-- normalization of every context/symptom/activation flag into separate relational tables;
-- causal statistical analysis or significance testing;
-- a tray-host rewrite;
-- an installer redesign except where required to support safe database migration/restart/restore behavior.
+- v1 import;
+- JSON Merge/synchronization/conflict resolution;
+- UUID record identity;
+- cloud sync;
+- accounts/multi-user/sharing;
+- mobile/remote hosting;
+- AI summaries or medical recommendations;
+- drug databases or interaction checking;
+- full edit audit history;
+- normalized tables for every flag or medication item;
+- generalized treatment-comparison analytics;
+- causal/significance statistics;
+- tray-host rewrite;
+- installer redesign except where strictly required by safe restore/restart behavior.
 
 ---
 
 ## 15. Acceptance criteria
 
-Med Check-in 2.2 is ready when all of the following are true:
+2.2 is ready when:
 
-1. an actual 2.1.1 database can upgrade automatically with a verified pre-migration backup and without losing existing observations or reminder state;
-2. scheduled records are identified by Day/Evening rather than literal `13:00`/`22:00` values;
-3. new scheduled entries cannot be saved with fabricated or missing scale values;
-4. unlimited Extras can be recorded without affecting scheduled analytics or reminder completion;
-5. new records correctly distinguish `observed_at`, immutable `recorded_at`, and changing `updated_at`, while migration does not invent an observation time for legacy rows;
-6. unsaved work survives accidental navigation/process loss through dirty-state protection and recoverable local drafts;
-7. structured treatment history contains the known baseline and dated 2026-07-07 regimen and can represent future dose changes;
-8. History can reach the complete dataset and distinguish Day, Evening, Extra, actual observation time when known, record time, and edit time;
-9. backup restore and 2.2+ JSON Merge/Replace paths validate before mutation and have recovery backups;
-10. analytics exclude Extras by default, use fixed trailing calendar smoothing, show treatment markers, and report scheduled completion without penalizing not-yet-due current-day slots;
-11. reminder UI and behavior use configured repeat/pause values rather than hardcoded values;
-12. Windows CI runs the core test and release-verification suite successfully;
-13. v1 import remains absent from the release while the new schema does not obstruct a later importer.
+1. a 2.1.1 database upgrades with a verified pre-migration backup and preserved observation/reminder data;
+2. scheduled identity is Day/Evening rather than literal clock times;
+3. scheduled entries cannot be saved with fabricated/missing scales;
+4. unlimited Extras work without affecting scheduled reminders/analytics;
+5. new records distinguish observation, first-record, and latest-edit time while legacy history is not fabricated;
+6. dirty forms have local draft recovery;
+7. simple structured treatment history contains the known baseline and 2026-07-07 regimen and supports later dose changes;
+8. History can reach the full dataset and display Day/Evening/Extra timing honestly;
+9. SQLite restore and 2.2+ JSON **Replace** import validate before mutation and create safety backups;
+10. analytics exclude Extras, use trailing smoothing, show treatment markers, and report sensible completion;
+11. reminder UI uses configured repeat/pause values;
+12. Windows CI runs the core test/package gate;
+13. deferred features listed above remain absent.
