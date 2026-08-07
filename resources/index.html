@@ -28,6 +28,13 @@
       <button type="button" class="tab" data-view="settings">Настройки</button>
     </nav>
 
+    <section id="reminder-pause-status" class="card hidden" aria-live="polite">
+      <div class="section-heading">
+        <div><h3>Напоминания приостановлены</h3><p id="reminder-pause-copy" class="muted"></p></div>
+        <button type="button" class="ghost" id="resume-paused-reminders">Возобновить</button>
+      </div>
+    </section>
+
     <main>
       <section id="view-checkin" class="view active">
         <div class="view-heading">
@@ -46,7 +53,7 @@
         <div id="reminder-banner" class="reminder-banner hidden">
           <div><strong>Напоминание активно</strong><span id="reminder-copy">Пора отметить состояние.</span></div>
           <div class="button-row compact">
-            <button type="button" class="secondary" id="snooze-reminder">Через 30 минут</button>
+            <button type="button" class="secondary" id="snooze-reminder">Напомнить позже</button>
             <button type="button" class="ghost" id="dismiss-reminder">Сегодня пропустить</button>
           </div>
         </div>
@@ -194,7 +201,7 @@
         <section class="card maintenance-card">
           <h3>Экспорт и резервные копии</h3>
           <p class="muted">CSV удобно анализировать, а переносимый JSON можно проверить и затем использовать для полной замены данных.</p>
-          <div class="button-row"><button type="button" class="secondary" id="export-csv">Экспорт CSV</button><button type="button" class="secondary" id="export-json">Экспорт JSON</button></div>
+          <div class="button-row"><button type="button" class="secondary" id="export-csv">Экспорт CSV</button><button type="button" class="secondary" id="export-json">Экспорт JSON</button><button type="button" class="secondary" id="open-data-folder">Открыть папку данных</button></div>
           <div class="maintenance-grid">
             <div>
               <h4>Резервные копии базы</h4>

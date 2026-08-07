@@ -154,6 +154,15 @@ function Set-DueActions([bool]$Enabled) {
   if ($script:DismissItem) { $script:DismissItem.Enabled = $Enabled }
 }
 
+function Set-SnoozeLabel([object]$Due = $null) {
+  if (-not $script:SnoozeItem) { return }
+  if ($Due -and $null -ne $Due.repeatMinutes) {
+    $script:SnoozeItem.Text = 'Напомнить через ' + [string]$Due.repeatMinutes + ' минут'
+  } else {
+    $script:SnoozeItem.Text = 'Напомнить позже'
+  }
+}
+
 function Open-CurrentDue {
   if ($script:CurrentDue) {
     Open-App -View 'checkin' -LocalDate ([string]$script:CurrentDue.localDate) -Slot ([string]$script:CurrentDue.slot)
@@ -186,11 +195,14 @@ function Handle-Poll([object]$Response) {
       Open-App -View $view -LocalDate ([string]$action.localDate) -Slot ([string]$action.slot)
     } elseif ([string]$action.type -eq 'close-window') {
       Close-AppWindows
+    } elseif ([string]$action.type -eq 'open-data-folder') {
+      Start-Process -FilePath 'explorer.exe' -ArgumentList @([string]$action.path) | Out-Null
     }
   }
 
   if ($Response.due) {
     $script:CurrentDue = $Response.due
+    Set-SnoozeLabel $Response.due
     Set-DueActions $true
     $key = [string]$Response.due.localDate + '|' + [string]$Response.due.slot
     $now = [datetime]::UtcNow
@@ -200,13 +212,14 @@ function Handle-Poll([object]$Response) {
       try {
         Invoke-Api -Method 'POST' -Path '/api/v1/reminders/notified' -Body @{
           localDate = [string]$Response.due.localDate
-          slot = [string]$Response.due.slot
+          period = [string]$Response.due.period
         } | Out-Null
       } catch {}
       Show-Reminder $Response.due
     }
   } else {
     $script:CurrentDue = $null
+    Set-SnoozeLabel
     Set-DueActions $false
   }
 }
@@ -235,8 +248,8 @@ function Snooze-Current {
   try {
     Invoke-Api -Method 'POST' -Path '/api/v1/reminders/snooze' -Body @{
       localDate = [string]$script:CurrentDue.localDate
-      slot = [string]$script:CurrentDue.slot
-      minutes = 30
+      period = [string]$script:CurrentDue.period
+      minutes = [int]$script:CurrentDue.repeatMinutes
     } | Out-Null
     $script:CurrentDue = $null
     Set-DueActions $false
@@ -251,7 +264,7 @@ function Dismiss-Current {
   try {
     Invoke-Api -Method 'POST' -Path '/api/v1/reminders/dismiss' -Body @{
       localDate = [string]$script:CurrentDue.localDate
-      slot = [string]$script:CurrentDue.slot
+      period = [string]$script:CurrentDue.period
     } | Out-Null
     $script:CurrentDue = $null
     Set-DueActions $false
@@ -313,7 +326,7 @@ try {
   [void]$menu.Items.Add((New-MenuItem 'Настройки' { Open-App -View 'settings' }))
   [void]$menu.Items.Add((New-Object -TypeName System.Windows.Forms.ToolStripSeparator))
 
-  $script:SnoozeItem = New-MenuItem 'Напомнить через 30 минут' { Snooze-Current }
+  $script:SnoozeItem = New-MenuItem 'Напомнить позже' { Snooze-Current }
   $script:DismissItem = New-MenuItem 'Сегодня пропустить' { Dismiss-Current }
   $script:SnoozeItem.Enabled = $false
   $script:DismissItem.Enabled = $false

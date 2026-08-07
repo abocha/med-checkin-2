@@ -43,6 +43,18 @@ test('frontend exposes backup restore and Replace-only JSON import controls', ()
   assert.match(js, /\/api\/v1\/import\/replace/);
 });
 
+test('frontend uses configured reminder actions and a fixed data-folder command', () => {
+  for (const id of ['reminder-pause-status', 'reminder-pause-copy', 'resume-paused-reminders', 'open-data-folder']) {
+    assert.match(html, new RegExp(`id=["']${id}["']`));
+  }
+  assert.doesNotMatch(html, /Через 30 минут/);
+  assert.match(js, /`Через \$\{state\.settings\.repeatMinutes\} минут`/);
+  assert.match(js, /minutes: state\.settings\.repeatMinutes/);
+  assert.match(js, /renderReminderPauseState/);
+  assert.match(js, /api\(['"]\/api\/v1\/control\/open-data-folder['"], \{ method: ['"]POST['"] \}\)/);
+  assert.doesNotMatch(js, /open-data-folder['"], \{[^}]*path/);
+});
+
 test('frontend includes secondary sleep, context, symptom, activation, and red flag fields', () => {
   for (const name of ['nightSleepHours','daySleepHours','sleepStart','wakeTime','notes','redFlags']) {
     assert.match(html, new RegExp(`name=["']${name}["']`));

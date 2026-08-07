@@ -2,7 +2,7 @@
 const state = {
   apiBase: null, token: null, settings: null, currentDate: null, currentKind: 'scheduled', currentPeriod: 'day',
   currentRecord: null, activeReminder: null, eventSource: null, toastTimer: null, extraDraftKey: null,
-  dirty: false, draftTimer: null, suppressDirty: false, historyOffset: 0, historyItems: [], treatmentEvents: [], pendingImport: null
+  dirty: false, draftTimer: null, pauseTimer: null, suppressDirty: false, historyOffset: 0, historyItems: [], treatmentEvents: [], pendingImport: null
 };
 
 const metricLabels = {
@@ -494,15 +494,34 @@ async function saveTreatmentEvent(event) {
   } catch (error) { toast(`Не удалось сохранить схему: ${error.message}`); }
 }
 
+function renderReminderPauseState() {
+  const status = $('#reminder-pause-status');
+  const copy = $('#reminder-pause-copy');
+  if (state.pauseTimer) { clearTimeout(state.pauseTimer); state.pauseTimer = null; }
+  const until = state.settings?.remindersPausedUntil ? new Date(state.settings.remindersPausedUntil) : null;
+  if (!status || !copy || !until || !Number.isFinite(until.getTime()) || until <= new Date()) {
+    status?.classList.add('hidden');
+    return;
+  }
+  status.classList.remove('hidden');
+  copy.textContent = `До ${new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium', timeStyle: 'short' }).format(until)}`;
+  state.pauseTimer = setTimeout(renderReminderPauseState, Math.max(0, until.getTime() - Date.now()) + 50);
+}
+function renderReminderSettings() {
+  if (!state.settings) return;
+  $('#snooze-reminder').textContent = `Через ${state.settings.repeatMinutes} минут`;
+  renderReminderPauseState();
+}
 async function fillSettings() {
   if (state.settings) for (const [key, value] of Object.entries(state.settings)) if ($('#settings-form').elements[key]) $('#settings-form').elements[key].value = value ?? '';
+  renderReminderSettings();
   await Promise.all([loadTreatmentEvents(), loadBackups()]);
 }
 async function saveSettings(event) {
   event.preventDefault(); const data = Object.fromEntries(new FormData(event.currentTarget).entries()); data.catchupHours = Number(data.catchupHours); data.repeatMinutes = Number(data.repeatMinutes);
-  state.settings = await api('/api/v1/settings', { method: 'PUT', body: JSON.stringify(data) }); toast('Настройки сохранены');
+  state.settings = await api('/api/v1/settings', { method: 'PUT', body: JSON.stringify(data) }); renderReminderSettings(); toast('Настройки сохранены');
 }
-async function updatePause(until) { state.settings = await api('/api/v1/settings', { method: 'PUT', body: JSON.stringify({ remindersPausedUntil: until }) }); toast(until ? 'Напоминания приостановлены' : 'Напоминания возобновлены'); }
+async function updatePause(until) { state.settings = await api('/api/v1/settings', { method: 'PUT', body: JSON.stringify({ remindersPausedUntil: until }) }); renderReminderSettings(); toast(until ? 'Напоминания приостановлены' : 'Напоминания возобновлены'); }
 async function exportFile(format) {
   const content = await api(`/api/v1/export.${format}`); const extension = format === 'csv' ? 'csv' : 'json'; const body = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
   const url = URL.createObjectURL(new Blob([body], { type: extension === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8' })); const link = document.createElement('a'); link.href = url; link.download = `med-checkin-${localDate()}.${extension}`; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); toast('Экспорт подготовлен');
@@ -583,7 +602,9 @@ function wireUi() {
   $('#treatment-event-form').elements.effectiveDate.addEventListener('change', event => { if (!$('#treatment-event-form').dataset.editing && event.target.value) renderRegimenFields(effectiveRegimen(dateDaysBefore(event.target.value, 1))); });
   $('#pause-two-hours').addEventListener('click', () => updatePause(new Date(Date.now() + 2 * 3600000).toISOString())); $('#resume-reminders').addEventListener('click', () => updatePause(null)); $('#export-csv').addEventListener('click', () => exportFile('csv')); $('#export-json').addEventListener('click', () => exportFile('json'));
   $('#create-backup').addEventListener('click', createBackupNow); $('#restore-backup').addEventListener('click', restoreSelectedBackup); $('#import-json').addEventListener('change', selectImportFile); $('#replace-import').addEventListener('click', replaceFromImport);
-  $('#snooze-reminder').addEventListener('click', async () => { if (!state.activeReminder) return; const { localDate: date, period } = state.activeReminder.due; await api('/api/v1/reminders/snooze', { method: 'POST', body: JSON.stringify({ localDate: date, period, minutes: state.settings?.repeatMinutes || 30 }) }); $('#reminder-banner').classList.add('hidden'); state.activeReminder = null; await closeWindow(); });
+  $('#open-data-folder').addEventListener('click', async () => { try { await api('/api/v1/control/open-data-folder', { method: 'POST' }); toast('Папка данных открыта'); } catch (error) { toast(`Не удалось открыть папку данных: ${error.message}`); } });
+  $('#resume-paused-reminders').addEventListener('click', () => updatePause(null));
+  $('#snooze-reminder').addEventListener('click', async () => { if (!state.activeReminder) return; const { localDate: date, period } = state.activeReminder.due; await api('/api/v1/reminders/snooze', { method: 'POST', body: JSON.stringify({ localDate: date, period, minutes: state.settings.repeatMinutes }) }); $('#reminder-banner').classList.add('hidden'); state.activeReminder = null; await closeWindow(); });
   $('#dismiss-reminder').addEventListener('click', async () => { if (!state.activeReminder) return; const { localDate: date, period } = state.activeReminder.due; await api('/api/v1/reminders/dismiss', { method: 'POST', body: JSON.stringify({ localDate: date, period }) }); $('#reminder-banner').classList.add('hidden'); state.activeReminder = null; await closeWindow(); });
   window.addEventListener('beforeunload', event => { if (!state.dirty) return; persistDraft(); event.preventDefault(); event.returnValue = ''; });
 }

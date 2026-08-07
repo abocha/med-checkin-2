@@ -339,12 +339,13 @@ export function createHttpServer({ repo, token, dataDir, resourcesDir = null, ho
     if (url.pathname === '/api/v1/export.csv' && req.method === 'GET') return text(res, 200, rowsToCsv(repo.exportRows()), 'text/csv; charset=utf-8');
     if (url.pathname === '/api/v1/export.json' && req.method === 'GET') return json(res, 200, maintenance?.exportPortable() ?? buildPortableExport(repo, now()));
 
-    const control = url.pathname.match(/^\/api\/v1\/control\/(show|close-window|restart-host|quit|heartbeat)$/);
+    const control = url.pathname.match(/^\/api\/v1\/control\/(show|close-window|open-data-folder|restart-host|quit|heartbeat)$/);
     if (control && req.method === 'POST') {
       const command = control[1];
       if (command === 'show') hostActions?.enqueue({ type: 'open', view: 'checkin' });
       if (command === 'close-window') hostActions?.enqueue({ type: 'close-window' });
-      if (!['show', 'close-window'].includes(command)) await onControl(command);
+      if (command === 'open-data-folder') hostActions?.enqueue({ type: 'open-data-folder', path: dataDir });
+      if (!['show', 'close-window', 'open-data-folder'].includes(command)) await onControl(command);
       return json(res, 200, { ok: true });
     }
 

@@ -51,6 +51,17 @@ test('tray menu exposes daily actions without requiring the browser to remain op
   assert.match(source, /control\/quit/);
 });
 
+test('tray host uses configured snooze minutes and opens only the queued data folder', () => {
+  const source = readFileSync(sourceUrl, 'utf8');
+  assert.match(source, /repeatMinutes/);
+  assert.doesNotMatch(source, /Напомнить через 30 минут/);
+  assert.match(source, /minutes = \[int\]\$script:CurrentDue\.repeatMinutes/);
+  assert.match(source, /period = \[string\]\$script:CurrentDue\.period/);
+  assert.match(source, /open-data-folder/);
+  assert.match(source, /Start-Process -FilePath 'explorer\.exe'/);
+  assert.match(source, /-ArgumentList @\(\[string\]\$action\.path\)/);
+});
+
 
 test('tray host relinquishes an orphaned instance when runtime ownership moves to another PID', () => {
   const source = readFileSync(sourceUrl, 'utf8');

@@ -286,6 +286,33 @@ test('host poll drains open and close commands and reports a due reminder', asyn
   }
 });
 
+test('fixed data-folder control queues the server-owned path and reminder snooze keeps configured minutes', async () => {
+  const f = await fixture({
+    hostActions: createHostActionQueue(),
+    now: () => new Date('2026-08-07T13:05:00')
+  });
+  try {
+    f.repo.saveSettings({ repeatMinutes: 45 });
+    let response = await api(f.base, '/api/v1/control/open-data-folder', {
+      method: 'POST',
+      body: JSON.stringify({ path: 'C:\\user-supplied-path' })
+    });
+    assert.equal(response.status, 200);
+
+    response = await api(f.base, '/api/v1/host/poll');
+    const payload = await response.json();
+    assert.deepEqual(payload.actions, [{ type: 'open-data-folder', path: f.dir }]);
+    assert.equal(payload.due.repeatMinutes, 45);
+
+    response = await api(f.base, '/api/v1/reminders/snooze', {
+      method: 'POST',
+      body: JSON.stringify({ localDate: '2026-08-07', period: 'day', minutes: 45 })
+    });
+    assert.equal(response.status, 200);
+    assert.equal(f.repo.getReminderStates('2026-08-07').day.snoozedUntil, '2026-08-07T06:50:00.000Z');
+  } finally { await f.close(); }
+});
+
 test('analytics API excludes Extras and returns dated treatment markers', async () => {
   const f = await fixture();
   try {
