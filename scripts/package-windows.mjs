@@ -3,12 +3,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-const VERSION = '2.1.1';
+const VERSION = '2.2.0';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const dist = join(root, 'dist');
 const stage = join(dist, 'package-stage');
 const packageRoot = join(stage, 'MedCheckin2');
-const archiveName = 'med-checkin-2.1.1-windows-installer.zip';
+const archiveName = 'med-checkin-2.2.0-windows-installer.zip';
 const archive = join(dist, archiveName);
 
 rmSync(stage, { recursive: true, force: true });
@@ -36,7 +36,7 @@ mkdirSync(dist, { recursive: true });
 
 let result;
 if (process.platform === 'win32') {
-  const command = `Compress-Archive -Path '${packageRoot.replaceAll("'", "''")}\\*' -DestinationPath '${archive.replaceAll("'", "''")}' -CompressionLevel Optimal -Force`;
+  const command = `Compress-Archive -Path '${packageRoot.replaceAll("'", "''")}' -DestinationPath '${archive.replaceAll("'", "''")}' -CompressionLevel Optimal -Force`;
   result = spawnSync('powershell.exe', ['-NoProfile', '-Command', command], { stdio: 'inherit' });
 } else {
   result = spawnSync('zip', ['-qr', archive, 'MedCheckin2'], { cwd: stage, stdio: 'inherit' });

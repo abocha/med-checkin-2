@@ -11,20 +11,42 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '2.1.1';
+const VERSION = '2.2.0';
 const ROOT_DIR = 'MedCheckin2';
 const REQUIRED_ENTRIES = [
   'INSTALL.bat',
   'README.txt',
   'THIRD_PARTY_NOTICES.txt',
   'VERSION.txt',
+  'backend/analytics.mjs',
+  'backend/backups.mjs',
+  'backend/data-maintenance.mjs',
+  'backend/domain.mjs',
+  'backend/host-actions.mjs',
+  'backend/http-server.mjs',
   'backend/main.mjs',
-  'windows/tray-host.ps1',
+  'backend/migrations.mjs',
+  'backend/process-safety.mjs',
+  'backend/reminders.mjs',
+  'backend/repository.mjs',
+  'backend/schema.mjs',
+  'backend/supervisor.mjs',
+  'backend/treatment.mjs',
+  'resources/app.js',
+  'resources/draft-store.js',
   'resources/index.html',
+  'resources/startup-runtime.js',
+  'resources/styles.css',
+  'resources/vendor/chart-lite.js',
   'resources/icons/app.ico',
+  'resources/icons/app.png',
+  'resources/icons/tray.png',
+  'windows/install.bat',
   'windows/install.ps1',
+  'windows/launch-hidden.vbs',
+  'windows/tray-host.ps1',
+  'windows/uninstall.bat',
   'windows/uninstall.ps1',
-  'windows/launch-hidden.vbs'
 ];
 const BOOTSTRAP_FILES = [
   'INSTALL.bat',
@@ -96,9 +118,16 @@ export function verifyRelease(archivePath) {
 
     const forbidden = files.filter((file) => {
       const lower = file.toLowerCase();
-      return lower.includes('neutralino') || lower === 'native/trayhost.cs' || lower.endsWith('/medcheckintray.exe') || lower === 'medcheckintray.exe';
+      return lower.includes('neutralino') ||
+        lower === 'native/trayhost.cs' ||
+        lower.endsWith('/medcheckintray.exe') ||
+        lower === 'medcheckintray.exe' ||
+        /(^|\/)(?:test|tests|fixtures)(?:\/|$)/.test(lower) ||
+        /(^|\/)(?:\.dev-data|node_modules|dist|\.codex)(?:\/|$)/.test(lower) ||
+        /(^|\/)(?:runtime\.json|edge-profile)(?:\/|$)/.test(lower) ||
+        /\.(?:sqlite(?:-(?:wal|shm))?|db|log)$/.test(lower);
     });
-    if (forbidden.length > 0) throw new Error(`Archive contains forbidden legacy host files: ${forbidden.join(', ')}`);
+    if (forbidden.length > 0) throw new Error(`Archive contains forbidden entries: ${forbidden.join(', ')}`);
 
     const version = readFileSync(join(packageRoot, 'VERSION.txt'), 'utf8').trim();
     if (version !== VERSION) throw new Error(`VERSION.txt contains ${version}, expected ${VERSION}`);
@@ -106,6 +135,11 @@ export function verifyRelease(archivePath) {
     const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
     if (packageJson.version !== VERSION) {
       throw new Error(`package.json contains ${packageJson.version}, expected ${VERSION}`);
+    }
+
+    const ui = readFileSync(join(packageRoot, 'resources/index.html'), 'utf8');
+    if (!ui.includes(`<title>Med Check-in ${VERSION}</title>`) || !ui.includes('<h1>Med Check-in <span>2.2</span></h1>')) {
+      throw new Error(`resources/index.html does not identify Med Check-in ${VERSION}`);
     }
 
     for (const relativePath of BOOTSTRAP_FILES) {

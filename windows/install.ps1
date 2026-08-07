@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$AppName = 'Med Check-in 2.1.1'
+$AppName = 'Med Check-in 2.2.0'
 $MainTaskName = 'Med Check-in 2.0'
 $WatchdogTaskName = 'Med Check-in 2.0 Watchdog'
 $NodeVersion = '22.23.1'
@@ -160,7 +160,7 @@ function Write-InstallDiagnostics([string]$Reason) {
   try {
     New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
     $lines = New-Object 'System.Collections.Generic.List[string]'
-    $lines.Add('Med Check-in 2.1.1 installation diagnostics')
+    $lines.Add('Med Check-in 2.2.0 installation diagnostics')
     $lines.Add('Generated: ' + [datetime]::UtcNow.ToString('o'))
     $lines.Add('Reason: ' + $Reason)
     $lines.Add('')
@@ -257,19 +257,19 @@ function Save-Shortcut([string]$ShortcutPath) {
   $shortcut.WorkingDirectory = $InstallDir
   $iconPath = Join-Path $InstallDir 'resources\icons\app.ico'
   $shortcut.IconLocation = $iconPath + ',0'
-  $shortcut.Description = 'Open Med Check-in 2.1'
+  $shortcut.Description = 'Open Med Check-in 2.2'
   $shortcut.Save()
 }
 
 function Create-Shortcuts {
   $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
   $desktop = [Environment]::GetFolderPath('Desktop')
-  foreach ($name in @('Med Check-in 2.0.lnk', 'Med Check-in 2.1.lnk')) {
+  foreach ($name in @('Med Check-in 2.0.lnk', 'Med Check-in 2.1.lnk', 'Med Check-in 2.2.lnk')) {
     Remove-Item (Join-Path $startMenu $name) -Force -ErrorAction SilentlyContinue
     Remove-Item (Join-Path $desktop $name) -Force -ErrorAction SilentlyContinue
   }
-  Save-Shortcut (Join-Path $startMenu 'Med Check-in 2.1.lnk')
-  Save-Shortcut (Join-Path $desktop 'Med Check-in 2.1.lnk')
+  Save-Shortcut (Join-Path $startMenu 'Med Check-in 2.2.lnk')
+  Save-Shortcut (Join-Path $desktop 'Med Check-in 2.2.lnk')
 }
 
 try {

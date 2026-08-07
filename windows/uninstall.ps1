@@ -4,7 +4,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$TaskNames = @('Med Check-in 2.0', 'Med Check-in 2.0 Watchdog', 'Med Check-in 2.1', 'Med Check-in 2.1 Watchdog')
+$TaskNames = @('Med Check-in 2.0', 'Med Check-in 2.0 Watchdog', 'Med Check-in 2.1', 'Med Check-in 2.1 Watchdog', 'Med Check-in 2.2', 'Med Check-in 2.2 Watchdog')
 $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\MedCheckin2'
 $DataDir = Join-Path $env:LOCALAPPDATA 'MedCheckin2'
 $TrayScript = Join-Path $InstallDir 'windows\tray-host.ps1'
@@ -43,7 +43,7 @@ Get-CimInstance -ClassName Win32_Process -Filter "Name = 'msedge.exe'" -ErrorAct
 
 $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
 $desktop = [Environment]::GetFolderPath('Desktop')
-foreach ($name in @('Med Check-in 2.0.lnk', 'Med Check-in 2.1.lnk')) {
+foreach ($name in @('Med Check-in 2.0.lnk', 'Med Check-in 2.1.lnk', 'Med Check-in 2.2.lnk')) {
   Remove-Item (Join-Path $startMenu $name) -Force -ErrorAction SilentlyContinue
   Remove-Item (Join-Path $desktop $name) -Force -ErrorAction SilentlyContinue
 }

@@ -147,16 +147,45 @@ test('installer performs a clean replacement, preserves data, and writes diagnos
   assert.doesNotMatch(script, /Remove-Item \$DataDir -Recurse/);
 });
 
-test('release metadata and verifier target Med Check-in 2.1.1', () => {
+test('release metadata and verifier target Med Check-in 2.2.0', () => {
   const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  const packageLock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
   const packageScript = readFileSync(join(root, 'scripts/package-windows.mjs'), 'utf8');
-  assert.equal(packageJson.version, '2.1.1');
+  const verifierScript = readFileSync(join(root, 'scripts/verify-release.mjs'), 'utf8');
+  const ui = readFileSync(join(root, 'resources/index.html'), 'utf8');
+  assert.equal(packageJson.version, '2.2.0');
+  assert.equal(packageLock.version, '2.2.0');
+  assert.equal(packageLock.packages[''].version, '2.2.0');
   assert.match(packageJson.scripts['package:windows'], /package-windows\.mjs/);
-  assert.match(packageScript, /med-checkin-2\.1\.1-windows-installer\.zip/);
+  assert.match(packageScript, /med-checkin-2\.2\.0-windows-installer\.zip/);
   assert.match(packageScript, /VERSION\.txt/);
-  assert.match(packageScript, /2\.1\.1/);
+  assert.match(packageScript, /2\.2\.0/);
   assert.match(packageScript, /verify-release\.mjs/);
+  assert.match(verifierScript, /2\.2\.0/);
+  assert.match(ui, /<title>Med Check-in 2\.2\.0<\/title>/);
+  assert.match(ui, /<h1>Med Check-in <span>2\.2<\/span><\/h1>/);
   assert.equal(existsSync(join(root, 'scripts/verify-release.mjs')), true);
+});
+
+test('package allowlist includes all runtime modules and excludes private test data', () => {
+  const script = readFileSync(join(root, 'scripts/package-windows.mjs'), 'utf8');
+  const entries = script.slice(script.indexOf('const entries = ['), script.indexOf('];', script.indexOf('const entries = [')) + 2);
+  for (const entry of ['backend', 'resources', 'windows', 'package.json', 'README.txt', 'INSTALL.bat', 'THIRD_PARTY_NOTICES.txt']) {
+    assert.match(entries, new RegExp(`['"]${entry}['"]`));
+  }
+  for (const excluded of ['test', 'fixtures', '.dev-data', 'node_modules', 'scripts']) {
+    assert.doesNotMatch(entries, new RegExp(`['"]${excluded}['"]`));
+  }
+  for (const runtime of [
+    'backend/backups.mjs',
+    'backend/data-maintenance.mjs',
+    'backend/migrations.mjs',
+    'backend/treatment.mjs',
+    'resources/draft-store.js',
+    'resources/startup-runtime.js'
+  ]) {
+    assert.equal(existsSync(join(root, runtime)), true, `${runtime} must be present in the packaged runtime tree`);
+  }
 });
 
 test('release source no longer contains Neutralino configuration', () => {
