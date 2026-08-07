@@ -15,6 +15,16 @@ test('frontend contains all primary views and core check-in controls', () => {
   }
 });
 
+test('frontend exposes semantic Day, Evening, Extra, missed-entry, and draft-recovery controls', () => {
+  for (const id of ['day-checkin', 'evening-checkin', 'extra-checkin', 'use-previous-values', 'add-missed-checkin']) {
+    assert.match(html, new RegExp(`id=["']${id}["']`));
+  }
+  assert.match(html, /draft-store\.js/);
+  assert.match(js, /error\.status === 409/);
+  assert.match(js, /MedCheckinDrafts/);
+  assert.match(js, /beforeunload/);
+});
+
 test('frontend includes secondary sleep, context, symptom, activation, and red flag fields', () => {
   for (const name of ['nightSleepHours','daySleepHours','sleepStart','wakeTime','notes','redFlags']) {
     assert.match(html, new RegExp(`name=["']${name}["']`));

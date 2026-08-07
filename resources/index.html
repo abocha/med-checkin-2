@@ -36,9 +36,10 @@
             <h2 id="checkin-title">Дневной чек-ин</h2>
             <p id="checkin-subtitle" class="muted">Сегодня · 13:00</p>
           </div>
-          <div class="slot-switch" role="group" aria-label="Время чек-ина">
-            <button type="button" data-slot="13:00">13:00</button>
-            <button type="button" data-slot="22:00">22:00</button>
+          <div class="slot-switch" role="group" aria-label="Тип записи">
+            <button type="button" id="day-checkin" data-entry-kind="scheduled" data-period="day">День</button>
+            <button type="button" id="evening-checkin" data-entry-kind="scheduled" data-period="evening">Вечер</button>
+            <button type="button" id="extra-checkin" data-entry-kind="extra">Дополнительно</button>
           </div>
         </div>
 
@@ -52,24 +53,33 @@
 
         <form id="checkin-form" autocomplete="off">
           <input type="hidden" name="localDate">
-          <input type="hidden" name="slot">
+          <input type="hidden" name="kind">
+          <input type="hidden" name="period">
+          <input type="hidden" name="scheduledFor">
+          <input type="hidden" name="observedAt">
 
           <section class="card">
             <div class="section-heading">
-              <div><h3>Как ты сейчас?</h3><p>Быстрая часть. Все шкалы от 0 до 10.</p></div>
+              <div><h3>Как ты сейчас?</h3><p>Все шкалы от 0 до 10. Для День/Вечер выбери каждую шкалу; для Дополнительно можно отметить только важное.</p></div>
               <span id="edit-state" class="pill">Новая запись</span>
             </div>
+            <div class="button-row scale-actions"><button type="button" class="secondary" id="use-previous-values">Использовать предыдущие значения</button><span id="scale-guidance" class="muted">0 — совсем нет / хуже всего · 10 — максимально / лучше всего</span></div>
 
             <div class="scale-grid">
-              <label class="scale-row"><span>Настроение</span><input type="range" name="mood" min="0" max="10" step="1" value="7"><output>7</output></label>
-              <label class="scale-row"><span>Тревога</span><input type="range" name="anxiety" min="0" max="10" step="1" value="1"><output>1</output></label>
-              <label class="scale-row"><span>Раздражительность</span><input type="range" name="irritability" min="0" max="10" step="1" value="1"><output>1</output></label>
-              <label class="scale-row"><span>Энергия</span><input type="range" name="energy" min="0" max="10" step="1" value="6"><output>6</output></label>
-              <label class="scale-row"><span>Концентрация</span><input type="range" name="focus" min="0" max="10" step="1" value="6"><output>6</output></label>
-              <label class="scale-row"><span>Функционирование</span><input type="range" name="functioning" min="0" max="10" step="1" value="7"><output>7</output></label>
-              <label class="scale-row"><span>Качество сна</span><input type="range" name="sleepQuality" min="0" max="10" step="1" value="6"><output>6</output></label>
-              <label class="scale-row"><span>Аппетит</span><input type="range" name="appetite" min="0" max="10" step="1" value="5"><output>5</output></label>
+              <label class="scale-row"><span>Настроение</span><input type="range" name="mood" min="0" max="10" step="1"><output>—</output></label>
+              <label class="scale-row"><span>Тревога</span><input type="range" name="anxiety" min="0" max="10" step="1"><output>—</output></label>
+              <label class="scale-row"><span>Раздражительность</span><input type="range" name="irritability" min="0" max="10" step="1"><output>—</output></label>
+              <label class="scale-row"><span>Энергия</span><input type="range" name="energy" min="0" max="10" step="1"><output>—</output></label>
+              <label class="scale-row"><span>Концентрация</span><input type="range" name="focus" min="0" max="10" step="1"><output>—</output></label>
+              <label class="scale-row"><span>Функционирование</span><input type="range" name="functioning" min="0" max="10" step="1"><output>—</output></label>
+              <label class="scale-row"><span>Качество сна</span><input type="range" name="sleepQuality" min="0" max="10" step="1"><output>—</output></label>
+              <label class="scale-row"><span>Аппетит</span><input type="range" name="appetite" min="0" max="10" step="1"><output>—</output></label>
             </div>
+          </section>
+
+          <section class="card observation-card">
+            <label>Время наблюдения<input type="datetime-local" name="observedAtLocal"></label>
+            <p class="muted">Для дополнительной записи можно указать прошедшее время наблюдения.</p>
           </section>
 
           <details class="card" open>
@@ -136,7 +146,7 @@
       </section>
 
       <section id="view-history" class="view">
-        <div class="view-heading"><div><p class="eyebrow">записи</p><h2>История чек-инов</h2><p class="muted">Любую запись можно открыть, исправить или удалить.</p></div><button type="button" class="secondary" id="refresh-history">Обновить</button></div>
+        <div class="view-heading"><div><p class="eyebrow">записи</p><h2>История чек-инов</h2><p class="muted">Любую запись можно открыть, исправить или удалить.</p></div><div class="button-row"><button type="button" class="secondary" id="add-missed-checkin">Добавить пропущенную</button><button type="button" class="secondary" id="refresh-history">Обновить</button></div></div>
         <div id="history-list" class="history-list"></div>
       </section>
 
@@ -173,10 +183,13 @@
       </section>
     </main>
 
+    <dialog id="draft-dialog" class="decision-dialog"><p id="draft-dialog-copy"></p><div class="button-row"><button type="button" class="primary" value="restore">Восстановить</button><button type="button" class="secondary" value="discard">Отбросить</button></div></dialog>
+    <dialog id="dirty-dialog" class="decision-dialog"><p>Есть несохранённые изменения. Что сделать перед переходом?</p><div class="button-row"><button type="button" class="primary" value="save">Сохранить</button><button type="button" class="secondary" value="discard">Отбросить</button><button type="button" class="ghost" value="cancel">Отмена</button></div></dialog>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
     <script src="./vendor/chart-lite.js"></script>
   <script src="./startup-runtime.js"></script>
+  <script src="./draft-store.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>
