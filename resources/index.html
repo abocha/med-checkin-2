@@ -146,19 +146,25 @@
       </section>
 
       <section id="view-history" class="view">
-        <div class="view-heading"><div><p class="eyebrow">записи</p><h2>История чек-инов</h2><p class="muted">Любую запись можно открыть, исправить или удалить.</p></div><div class="button-row"><button type="button" class="secondary" id="add-missed-checkin">Добавить пропущенную</button><button type="button" class="secondary" id="refresh-history">Обновить</button></div></div>
+        <div class="view-heading"><div><p class="eyebrow">записи</p><h2>История чек-инов</h2><p class="muted">Любую запись можно открыть, исправить или удалить.</p></div><div class="button-row"><button type="button" class="secondary" id="add-missed-checkin">Добавить пропущенную</button><button type="button" class="secondary" id="add-extra-from-history">Дополнительно</button><button type="button" class="secondary" id="refresh-history">Обновить</button></div></div>
+        <section class="card history-filters" aria-label="Фильтры истории">
+          <label>Период<select id="history-range"><option value="7">7 дней</option><option value="30" selected>30 дней</option><option value="90">90 дней</option><option value="all">Все записи</option><option value="custom">Свой период</option></select></label>
+          <label>Тип записи<select id="history-period"><option value="all">День, Вечер и Дополнительно</option><option value="day">День</option><option value="evening">Вечер</option><option value="extra">Дополнительно</option></select></label>
+          <label>С<input type="date" id="history-from"></label><label>По<input type="date" id="history-to"></label>
+        </section>
         <div id="history-list" class="history-list"></div>
+        <div class="button-row history-more"><button type="button" class="secondary" id="load-more-history" hidden>Загрузить ещё</button></div>
       </section>
 
       <section id="view-analytics" class="view">
         <div class="view-heading"><div><p class="eyebrow">описательная аналитика</p><h2>Что меняется со временем</h2><p class="muted">Графики показывают рисунок данных, но не доказывают причину изменений.</p></div><button type="button" class="secondary" id="refresh-analytics">Пересчитать</button></div>
         <div id="analytics-kpis" class="kpi-grid"></div>
+        <section id="completion-stats" class="card"></section>
         <section class="card chart-card"><div class="section-heading"><div><h3>Основные показатели</h3><p>Ежедневные средние и трёхдневное сглаживание.</p></div></div><div id="trend-chart" class="chart"></div></section>
         <div class="two-column">
           <section class="card"><h3>Днём и вечером</h3><div id="paired-comparison"></div></section>
           <section class="card"><h3>Частые отметки</h3><div id="frequency-chart"></div></section>
         </div>
-        <section class="card"><h3>Первые семь дней и последующий период</h3><div id="period-comparison"></div></section>
       </section>
 
       <section id="view-settings" class="view">
@@ -169,11 +175,22 @@
             <label>Вечернее напоминание<input type="time" name="eveningTime" required></label>
             <label>Догонять в течение, часов<input type="number" name="catchupHours" min="1" max="12" step="1"></label>
             <label>Повторять через, минут<input type="number" name="repeatMinutes" min="15" max="240" step="5"></label>
-            <label>Дата изменения лечения<input type="date" name="treatmentChangeDate"></label>
-            <label>Подпись лечения<input type="text" name="medicationLabel" maxlength="300"></label>
           </div>
           <div class="button-row"><button type="submit" class="primary">Сохранить настройки</button><button type="button" class="secondary" id="pause-two-hours">Пауза на 2 часа</button><button type="button" class="ghost" id="resume-reminders">Возобновить</button></div>
         </form>
+        <section class="card treatment-card">
+          <div class="section-heading"><div><h3>Лечение</h3><p>Полный снимок схемы на дату изменения.</p></div><button type="button" class="secondary" id="add-treatment-event">Добавить изменение</button></div>
+          <p id="current-regimen" class="muted"></p>
+          <form id="treatment-event-form" class="treatment-form" hidden>
+            <input type="hidden" name="id">
+            <label>Действует с<input type="date" name="effectiveDate"></label>
+            <div id="treatment-regimen-items" class="treatment-regimen-items"></div>
+            <div class="button-row"><button type="button" class="secondary" id="add-treatment-medication">Добавить препарат</button></div>
+            <label>Заметка<textarea name="note" rows="2"></textarea></label>
+            <div class="button-row"><button type="submit" class="primary">Сохранить схему</button><button type="button" class="ghost" id="cancel-treatment-event">Отмена</button></div>
+          </form>
+          <div id="treatment-events" class="treatment-events"></div>
+        </section>
         <section class="card">
           <h3>Экспорт и резервные копии</h3>
           <p class="muted">CSV удобно анализировать, JSON сохраняет полную структуру. Автоматические копии базы хранятся 30 дней.</p>

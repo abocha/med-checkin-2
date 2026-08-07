@@ -282,7 +282,9 @@ export function createHttpServer({ repo, token, dataDir, resourcesDir = null, ho
     }
 
     if (url.pathname === '/api/v1/analytics' && req.method === 'GET') {
-      return json(res, 200, buildAnalytics(repo.listCheckins({ limit: 1000 }), repo.getSettings()));
+      return json(res, 200, buildAnalytics(repo.listAllCheckins(), repo.getSettings(), {
+        now: now(), treatmentEvents: repo.listTreatmentEvents()
+      }));
     }
 
     if (url.pathname === '/api/v1/reminders/due' && req.method === 'GET') {

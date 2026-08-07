@@ -227,6 +227,18 @@ test('host poll drains open and close commands and reports a due reminder', asyn
   }
 });
 
+test('analytics API excludes Extras and returns dated treatment markers', async () => {
+  const f = await fixture();
+  try {
+    await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify(body) });
+    await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify({ kind: 'extra', period: null, localDate: '2026-07-31', observedAt: '2026-07-31T08:00:00.000Z', mood: 1 }) });
+    const response = await api(f.base, '/api/v1/analytics');
+    const analytics = await response.json();
+    assert.equal(analytics.count, 1);
+    assert.equal(analytics.treatmentMarkers[0].effectiveDate, '2026-07-07');
+  } finally { await f.close(); }
+});
+
 test('host poll recognizes a completed previous Evening during cross-midnight catch-up', async () => {
   const f = await fixture({ now: () => new Date(2026, 7, 1, 0, 30) });
   try {

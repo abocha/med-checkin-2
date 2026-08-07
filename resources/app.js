@@ -2,7 +2,7 @@
 const state = {
   apiBase: null, token: null, settings: null, currentDate: null, currentKind: 'scheduled', currentPeriod: 'day',
   currentRecord: null, activeReminder: null, eventSource: null, toastTimer: null, extraDraftKey: null,
-  dirty: false, draftTimer: null, suppressDirty: false
+  dirty: false, draftTimer: null, suppressDirty: false, historyOffset: 0, historyItems: [], treatmentEvents: []
 };
 
 const metricLabels = {
@@ -36,6 +36,11 @@ function isoFromLocalDateTime(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
+function dateDaysBefore(value, days) { const date = new Date(`${value}T12:00:00`); date.setDate(date.getDate() - days); return localDate(date); }
+function formatStoredTime(value, { date = false } = {}) {
+  return new Date(value).toLocaleString('ru-RU', date ? { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' } : { hour: '2-digit', minute: '2-digit' });
+}
+function regimenText(regimen = []) { return regimen.length ? regimen.map(item => `${item.name} ${item.amount} ${item.unit}${item.timing ? ` · ${item.timing}` : ''}`).join(' · ') : 'Нет активных препаратов'; }
 
 function toast(message) {
   const element = $('#toast');
@@ -370,41 +375,129 @@ async function addMissedCheckin() {
   resetForm({ kind: 'scheduled', period, date, observedAt, scheduledFor });
 }
 
-async function loadHistory() {
+function historyRequest(append) {
+  const range = $('#history-range').value;
+  const period = $('#history-period').value;
+  const query = new URLSearchParams({ limit: '50', offset: String(append ? state.historyOffset : 0) });
+  if (range === 'custom') {
+    if ($('#history-from').value) query.set('from', $('#history-from').value);
+    if ($('#history-to').value) query.set('to', $('#history-to').value);
+  } else if (range !== 'all') query.set('from', dateDaysBefore(localDate(), Number(range) - 1));
+  if (period === 'extra') query.set('kind', 'extra');
+  if (period === 'day' || period === 'evening') { query.set('kind', 'scheduled'); query.set('period', period); }
+  return query;
+}
+
+function timingLines(item) {
+  const lines = [];
+  if (item.observedAt) lines.push(`${item.kind === 'extra' ? 'Наблюдалось' : 'Наблюдалось'} ${formatStoredTime(item.observedAt, { date: true })}`);
+  if (item.recordedAt) lines.push(`Записано ${formatStoredTime(item.recordedAt, { date: true })}`);
+  if (item.updatedAt && item.updatedAt !== item.recordedAt) lines.push(`Изменено ${formatStoredTime(item.updatedAt, { date: true })}`);
+  return lines.map(line => `<span>${escapeHtml(line)}</span>`).join('');
+}
+
+function renderHistory() {
   const list = $('#history-list');
-  list.innerHTML = '<div class="empty">Загружаю записи…</div>';
+  if (!state.historyItems.length) { list.innerHTML = '<div class="empty">Пока нет записей по этому фильтру.</div>'; return; }
+  list.innerHTML = state.historyItems.map(item => `<article class="history-item">
+    <div class="history-date">${escapeHtml(niceDate(item.localDate))}<small>${item.kind === 'extra' ? 'Дополнительная запись' : `${periodLabel(item.period)}${item.scheduledFor ? ` · запланировано ${formatStoredTime(item.scheduledFor)}` : ''}`}</small></div>
+    <div><div class="metric-chips">${['mood', 'energy', 'focus', 'functioning', 'anxiety'].filter(key => item[key] != null).map(key => `<span class="metric-chip">${metricLabels[key]} <b>${round(item[key])}</b></span>`).join('')}</div>${item.notes ? `<p class="muted" style="margin-top:8px">${escapeHtml(item.notes.slice(0, 180))}</p>` : ''}<div class="record-timing">${timingLines(item)}</div></div>
+    <div class="button-row"><button type="button" class="secondary" data-edit-id="${item.id}">Открыть</button><button type="button" class="ghost" data-delete-id="${item.id}">Удалить</button></div>
+  </article>`).join('');
+  $$('[data-edit-id]').forEach(button => button.addEventListener('click', async () => { const record = await api(`/api/v1/checkins/${button.dataset.editId}`); await openRecord(record); }));
+  $$('[data-delete-id]').forEach(button => button.addEventListener('click', async () => {
+    if (!confirm('Удалить эту запись без возможности восстановления?')) return;
+    await api(`/api/v1/checkins/${button.dataset.deleteId}`, { method: 'DELETE' }); toast('Запись удалена'); loadHistory();
+  }));
+}
+
+async function loadHistory(append = false) {
+  const list = $('#history-list');
+  if (!append) { state.historyOffset = 0; state.historyItems = []; list.innerHTML = '<div class="empty">Загружаю записи…</div>'; }
   try {
-    const { items } = await api('/api/v1/checkins?limit=200');
-    if (!items.length) { list.innerHTML = '<div class="empty">Пока нет ни одной записи.</div>'; return; }
-    list.innerHTML = items.map(item => `<article class="history-item">
-      <div class="history-date">${escapeHtml(niceDate(item.localDate))}<small>${item.kind === 'extra' ? 'Дополнительная запись' : `${periodLabel(item.period)} · ${item.scheduledFor ? new Date(item.scheduledFor).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : 'без времени'}`}</small></div>
-      <div><div class="metric-chips">${['mood', 'energy', 'focus', 'functioning', 'anxiety'].filter(key => item[key] != null).map(key => `<span class="metric-chip">${metricLabels[key]} <b>${round(item[key])}</b></span>`).join('')}</div>${item.notes ? `<p class="muted" style="margin-top:8px">${escapeHtml(item.notes.slice(0, 180))}</p>` : ''}</div>
-      <div class="button-row"><button type="button" class="secondary" data-edit-id="${item.id}">Открыть</button><button type="button" class="ghost" data-delete-id="${item.id}">Удалить</button></div>
-    </article>`).join('');
-    $$('[data-edit-id]').forEach(button => button.addEventListener('click', async () => {
-      const record = await api(`/api/v1/checkins/${button.dataset.editId}`); await openRecord(record);
-    }));
-    $$('[data-delete-id]').forEach(button => button.addEventListener('click', async () => {
-      if (!confirm('Удалить эту запись без возможности восстановления?')) return;
-      await api(`/api/v1/checkins/${button.dataset.deleteId}`, { method: 'DELETE' });
-      toast('Запись удалена'); loadHistory();
-    }));
+    const { items } = await api(`/api/v1/checkins?${historyRequest(append)}`);
+    state.historyItems.push(...items); state.historyOffset = state.historyItems.length; renderHistory();
+    $('#load-more-history').hidden = items.length < 50;
   } catch (error) { list.innerHTML = `<div class="empty">Не удалось загрузить историю: ${escapeHtml(error.message)}</div>`; }
 }
 
 function comparisonTable(rows, columns) { return `<table class="comparison-table"><thead><tr><th>Показатель</th>${columns.map(c => `<th>${c.label}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr><td>${row.label}</td>${columns.map(c => `<td>${round(c.values[row.key])}</td>`).join('')}</tr>`).join('')}</tbody></table>`; }
 async function loadAnalytics() {
   const data = await api('/api/v1/analytics');
-  $('#analytics-kpis').innerHTML = [['Чек-инов', data.count], ['Дней', data.days], ['Среднее настроение', round(data.overall.mood)], ['Средняя тревога', round(data.overall.anxiety)]].map(([label, value]) => `<div class="kpi"><strong>${value}</strong><span>${label}</span></div>`).join('');
-  ChartLite.renderTrend($('#trend-chart'), data.daily);
+  $('#analytics-kpis').innerHTML = [['Запланированных', data.count], ['Дней', data.days], ['Среднее настроение', round(data.overall.mood)], ['Средняя тревога', round(data.overall.anxiety)]].map(([label, value]) => `<div class="kpi"><strong>${value}</strong><span>${label}</span></div>`).join('');
+  const completion = data.completion;
+  $('#completion-stats').innerHTML = `<h3>Выполнение расписания</h3><p class="muted">${completion.opportunities ? `${completion.completed} из ${completion.opportunities} прошедших или отмеченных заранее запланированных периодов (${round(completion.rate)}%)` : 'Пока нет прошедших запланированных периодов.'}</p>`;
+  ChartLite.renderTrend($('#trend-chart'), data.daily, data.treatmentMarkers);
   const rows = ['mood', 'energy', 'focus', 'functioning', 'anxiety'].map(key => ({ key, label: metricLabels[key] }));
   $('#paired-comparison').innerHTML = data.pairedDays ? `<p class="muted" style="margin-bottom:10px">Средняя разница «вечер минус день» на ${data.pairedDays} парных днях.</p>${comparisonTable(rows, [{ label: 'Δ вечером', values: data.pairedDelta }])}` : '<div class="empty">Нужно несколько дней с обеими отметками.</div>';
   const frequencyItems = Object.entries({ ...data.frequencies.symptoms, ...data.frequencies.activation, ...data.frequencies.context }).map(([key, value]) => ({ label: flagLabels[key] || key, value })).sort((a, b) => b.value - a.value).slice(0, 10);
   ChartLite.renderBars($('#frequency-chart'), frequencyItems);
-  $('#period-comparison').innerHTML = comparisonTable(rows, [{ label: 'Первые 7 дней', values: data.periods.first7 }, { label: 'Позже', values: data.periods.later }]);
 }
 
-function fillSettings() { if (state.settings) for (const [key, value] of Object.entries(state.settings)) if ($('#settings-form').elements[key]) $('#settings-form').elements[key].value = value ?? ''; }
+function effectiveRegimen(date = localDate()) {
+  const eligible = state.treatmentEvents.filter(event => event.effectiveDate === null || event.effectiveDate <= date);
+  return eligible[eligible.length - 1]?.regimen ?? [];
+}
+
+function renderRegimenFields(regimen = []) {
+  const items = $('#treatment-regimen-items');
+  items.innerHTML = regimen.map((item, index) => `<div class="treatment-medication" data-regimen-index="${index}">
+    <label>Препарат<input type="text" data-treatment-field="name" value="${escapeHtml(item.name ?? '')}"></label>
+    <label>Доза<input type="number" min="0.01" step="any" data-treatment-field="amount" value="${escapeHtml(item.amount ?? '')}"></label>
+    <label>Ед.<input type="text" data-treatment-field="unit" value="${escapeHtml(item.unit ?? '')}"></label>
+    <label>Когда<input type="text" data-treatment-field="timing" value="${escapeHtml(item.timing ?? '')}"></label>
+    <button type="button" class="ghost" data-remove-medication="${index}">Убрать</button>
+  </div>`).join('');
+  $$('[data-remove-medication]', items).forEach(button => button.addEventListener('click', () => {
+    const values = treatmentFormRegimen(); values.splice(Number(button.dataset.removeMedication), 1); renderRegimenFields(values);
+  }));
+}
+
+function treatmentFormRegimen() {
+  return $$('.treatment-medication', $('#treatment-regimen-items')).map(item => Object.fromEntries($$('[data-treatment-field]', item).map(input => [input.dataset.treatmentField, input.value])));
+}
+
+function renderTreatmentEvents() {
+  $('#current-regimen').textContent = `Сегодня: ${regimenText(effectiveRegimen())}`;
+  $('#medication-label').textContent = regimenText(effectiveRegimen());
+  const events = $('#treatment-events');
+  events.innerHTML = state.treatmentEvents.map(event => `<article class="treatment-event">
+    <div><h4>${escapeHtml(event.effectiveDate ? `С ${niceDate(event.effectiveDate)}` : 'Исходная схема')}</h4><p>${escapeHtml(regimenText(event.regimen))}${event.note ? ` · ${escapeHtml(event.note)}` : ''}</p></div>
+    <div class="button-row compact"><button type="button" class="secondary" data-edit-treatment="${event.id}">Изменить</button><button type="button" class="ghost" data-delete-treatment="${event.id}">Удалить</button></div>
+  </article>`).join('') || '<div class="empty">Схема лечения ещё не указана.</div>';
+  $$('[data-edit-treatment]', events).forEach(button => button.addEventListener('click', () => openTreatmentForm(state.treatmentEvents.find(event => event.id === Number(button.dataset.editTreatment)))));
+  $$('[data-delete-treatment]', events).forEach(button => button.addEventListener('click', async () => {
+    if (!confirm('Удалить этот снимок схемы лечения?')) return;
+    await api(`/api/v1/treatment-events/${button.dataset.deleteTreatment}`, { method: 'DELETE' }); await loadTreatmentEvents(); toast('Схема лечения удалена');
+  }));
+}
+
+async function loadTreatmentEvents() {
+  const { items } = await api('/api/v1/treatment-events'); state.treatmentEvents = items; renderTreatmentEvents();
+}
+
+function openTreatmentForm(event = null) {
+  const form = $('#treatment-event-form'); form.hidden = false; form.elements.id.value = event?.id ?? '';
+  form.elements.effectiveDate.value = event?.effectiveDate ?? localDate(); form.elements.note.value = event?.note ?? '';
+  form.dataset.editing = event ? 'true' : '';
+  renderRegimenFields(event?.regimen ?? effectiveRegimen(dateDaysBefore(form.elements.effectiveDate.value, 1)));
+  form.elements.effectiveDate.focus();
+}
+
+async function saveTreatmentEvent(event) {
+  event.preventDefault(); const form = event.currentTarget;
+  const payload = { effectiveDate: form.elements.effectiveDate.value || null, regimen: treatmentFormRegimen(), note: form.elements.note.value };
+  try {
+    if (form.elements.id.value) await api(`/api/v1/treatment-events/${form.elements.id.value}`, { method: 'PUT', body: JSON.stringify(payload) });
+    else await api('/api/v1/treatment-events', { method: 'POST', body: JSON.stringify(payload) });
+    form.hidden = true; await loadTreatmentEvents(); toast('Схема лечения сохранена');
+  } catch (error) { toast(`Не удалось сохранить схему: ${error.message}`); }
+}
+
+async function fillSettings() {
+  if (state.settings) for (const [key, value] of Object.entries(state.settings)) if ($('#settings-form').elements[key]) $('#settings-form').elements[key].value = value ?? '';
+  await loadTreatmentEvents();
+}
 async function saveSettings(event) {
   event.preventDefault(); const data = Object.fromEntries(new FormData(event.currentTarget).entries()); data.catchupHours = Number(data.catchupHours); data.repeatMinutes = Number(data.repeatMinutes);
   state.settings = await api('/api/v1/settings', { method: 'PUT', body: JSON.stringify(data) }); toast('Настройки сохранены');
@@ -440,7 +533,12 @@ function wireUi() {
   $$('.tab').forEach(button => button.addEventListener('click', () => switchView(button.dataset.view)));
   $$('[data-entry-kind]').forEach(button => button.addEventListener('click', () => startEntry(button.dataset.entryKind, button.dataset.period || null)));
   $('#checkin-form').addEventListener('submit', saveCheckin); $('#checkin-form').addEventListener('change', markDirty); $('#checkin-form').addEventListener('input', event => { if (event.target.type !== 'range') markDirty(); });
-  $('#use-previous-values').addEventListener('click', usePreviousValues); $('#hide-window').addEventListener('click', closeWindow); $('#refresh-history').addEventListener('click', loadHistory); $('#add-missed-checkin').addEventListener('click', addMissedCheckin); $('#refresh-analytics').addEventListener('click', loadAnalytics); $('#settings-form').addEventListener('submit', saveSettings);
+  $('#use-previous-values').addEventListener('click', usePreviousValues); $('#hide-window').addEventListener('click', closeWindow); $('#refresh-history').addEventListener('click', () => loadHistory()); $('#add-missed-checkin').addEventListener('click', addMissedCheckin); $('#add-extra-from-history').addEventListener('click', () => startEntry('extra')); $('#load-more-history').addEventListener('click', () => loadHistory(true));
+  ['history-range', 'history-period', 'history-from', 'history-to'].forEach(id => $(`#${id}`).addEventListener('change', event => { if (id !== 'history-range' && id !== 'history-period') $('#history-range').value = 'custom'; loadHistory(); }));
+  $('#refresh-analytics').addEventListener('click', loadAnalytics); $('#settings-form').addEventListener('submit', saveSettings);
+  $('#add-treatment-event').addEventListener('click', () => openTreatmentForm()); $('#treatment-event-form').addEventListener('submit', saveTreatmentEvent); $('#cancel-treatment-event').addEventListener('click', () => { $('#treatment-event-form').hidden = true; });
+  $('#add-treatment-medication').addEventListener('click', () => { const regimen = treatmentFormRegimen(); regimen.push({ name: '', amount: '', unit: 'mg', timing: '' }); renderRegimenFields(regimen); });
+  $('#treatment-event-form').elements.effectiveDate.addEventListener('change', event => { if (!$('#treatment-event-form').dataset.editing && event.target.value) renderRegimenFields(effectiveRegimen(dateDaysBefore(event.target.value, 1))); });
   $('#pause-two-hours').addEventListener('click', () => updatePause(new Date(Date.now() + 2 * 3600000).toISOString())); $('#resume-reminders').addEventListener('click', () => updatePause(null)); $('#export-csv').addEventListener('click', () => exportFile('csv')); $('#export-json').addEventListener('click', () => exportFile('json'));
   $('#snooze-reminder').addEventListener('click', async () => { if (!state.activeReminder) return; const { localDate: date, period } = state.activeReminder.due; await api('/api/v1/reminders/snooze', { method: 'POST', body: JSON.stringify({ localDate: date, period, minutes: state.settings?.repeatMinutes || 30 }) }); $('#reminder-banner').classList.add('hidden'); state.activeReminder = null; await closeWindow(); });
   $('#dismiss-reminder').addEventListener('click', async () => { if (!state.activeReminder) return; const { localDate: date, period } = state.activeReminder.due; await api('/api/v1/reminders/dismiss', { method: 'POST', body: JSON.stringify({ localDate: date, period }) }); $('#reminder-banner').classList.add('hidden'); state.activeReminder = null; await closeWindow(); });

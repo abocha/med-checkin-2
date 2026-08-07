@@ -25,6 +25,16 @@ test('frontend exposes semantic Day, Evening, Extra, missed-entry, and draft-rec
   assert.match(js, /beforeunload/);
 });
 
+test('frontend exposes bounded history filters, treatment events, and completion analytics', () => {
+  for (const id of ['history-range', 'history-period', 'history-from', 'history-to', 'load-more-history', 'treatment-events', 'add-treatment-event', 'completion-stats']) {
+    assert.match(html, new RegExp(`id=["']${id}["']`));
+  }
+  assert.match(js, /treatment-events/);
+  assert.match(js, /treatmentMarkers/);
+  assert.match(js, /scheduledFor/);
+  assert.match(js, /observedAt/);
+});
+
 test('frontend includes secondary sleep, context, symptom, activation, and red flag fields', () => {
   for (const name of ['nightSleepHours','daySleepHours','sleepStart','wakeTime','notes','redFlags']) {
     assert.match(html, new RegExp(`name=["']${name}["']`));
