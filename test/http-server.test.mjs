@@ -7,17 +7,19 @@ import { createRepository } from '../backend/repository.mjs';
 import { createHttpServer } from '../backend/http-server.mjs';
 import { createHostActionQueue } from '../backend/host-actions.mjs';
 
-async function fixture() {
+async function fixture(options = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'med-checkin-api-'));
   const repo = createRepository(join(dir, 'test.sqlite'));
-  const app = createHttpServer({ repo, token: 'secret-token', dataDir: dir, resourcesDir: new URL('../resources/', import.meta.url) });
+  const app = createHttpServer({ repo, token: 'secret-token', dataDir: dir, resourcesDir: new URL('../resources/', import.meta.url), now: () => new Date('2026-08-07T01:02:03.000Z'), ...options });
   await app.listen(0);
   const base = `http://127.0.0.1:${app.port}`;
   return { dir, repo, app, base, close: async () => { await app.close(); repo.close(); rmSync(dir, {recursive:true, force:true}); } };
 }
 
 const body = {
-  localDate: '2026-07-31', slot: '13:00', mood: 7, anxiety: 1,
+  kind: 'scheduled', period: 'day', localDate: '2026-07-31',
+  scheduledFor: '2026-07-31T06:00:00.000Z', observedAt: '2026-07-31T06:05:00.000Z',
+  mood: 7, anxiety: 1,
   irritability: 0, energy: 6, focus: 7, functioning: 8,
   sleepQuality: 6, appetite: 5, nightSleepHours: 7, daySleepHours: 0,
   context: ['caffeine'], symptoms: [], activation: [], notes: 'ok', redFlags: ''
@@ -38,21 +40,68 @@ test('API rejects unauthenticated access', async () => {
   } finally { await f.close(); }
 });
 
-test('API saves, updates, reads, lists, and deletes a check-in', async () => {
-  const f = await fixture();
+test('API creates, edits, filters, reads, and deletes semantic observations', async () => {
+  const times = [new Date('2026-08-07T01:02:03.000Z'), new Date('2026-08-07T01:05:00.000Z')];
+  const f = await fixture({ now: () => times.shift() ?? new Date('2026-08-07T01:05:00.000Z') });
   try {
     let response = await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify(body) });
-    assert.equal(response.status, 200);
+    assert.equal(response.status, 201);
     const first = await response.json();
-    response = await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify({...body, mood: 9}) });
+    assert.equal(first.recordedAt, '2026-08-07T01:02:03.000Z');
+    assert.equal(first.updatedAt, first.recordedAt);
+    response = await api(f.base, `/api/v1/checkins/${first.id}`, { method: 'PUT', body: JSON.stringify({...body, mood: 9, recordedAt: 'client-owned', updatedAt: 'client-owned'}) });
     const updated = await response.json();
     assert.equal(updated.id, first.id);
     assert.equal(updated.mood, 9);
-    response = await api(f.base, '/api/v1/checkin?date=2026-07-31&slot=13%3A00');
+    assert.equal(updated.recordedAt, first.recordedAt);
+    assert.equal(updated.updatedAt, '2026-08-07T01:05:00.000Z');
+    response = await api(f.base, '/api/v1/checkin?date=2026-07-31&period=day');
     assert.equal((await response.json()).mood, 9);
-    response = await api(f.base, '/api/v1/checkins?limit=10');
+    response = await api(f.base, '/api/v1/checkins?limit=10&kind=scheduled&period=day');
     assert.equal((await response.json()).items.length, 1);
     response = await api(f.base, `/api/v1/checkins/${first.id}`, { method: 'DELETE' });
+    assert.equal(response.status, 204);
+  } finally { await f.close(); }
+});
+
+test('API rejects duplicate scheduled identity, accepts partial Extras, and rejects empty Extras', async () => {
+  const f = await fixture();
+  try {
+    let response = await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify(body) });
+    assert.equal(response.status, 201);
+    response = await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify(body) });
+    assert.equal(response.status, 409);
+    const duplicate = await response.json();
+    assert.equal(duplicate.existing.period, 'day');
+
+    const extra = { kind: 'extra', period: null, localDate: '2026-07-31', observedAt: '2026-07-31T08:00:00.000Z', mood: 4 };
+    response = await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify(extra) });
+    assert.equal(response.status, 201);
+    assert.equal((await response.json()).anxiety, null);
+    response = await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify({ ...extra, mood: null }) });
+    assert.equal(response.status, 400);
+  } finally { await f.close(); }
+});
+
+test('API exposes treatment event CRUD and current effective treatment', async () => {
+  const f = await fixture();
+  try {
+    let response = await api(f.base, '/api/v1/treatment-events');
+    assert.equal((await response.json()).items.length, 2);
+    response = await api(f.base, '/api/v1/treatment-events', {
+      method: 'POST',
+      body: JSON.stringify({ effectiveDate: '2026-08-01', regimen: [], note: 'stopped' })
+    });
+    assert.equal(response.status, 201);
+    const created = await response.json();
+    response = await api(f.base, `/api/v1/treatment-events/${created.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ effectiveDate: '2026-08-01', regimen: [{ name: 'Example', amount: 2, unit: 'mg' }], note: '' })
+    });
+    assert.equal((await response.json()).regimen[0].name, 'Example');
+    response = await api(f.base, '/api/v1/bootstrap');
+    assert.equal((await response.json()).currentTreatment.regimen[0].name, 'Example');
+    response = await api(f.base, `/api/v1/treatment-events/${created.id}`, { method: 'DELETE' });
     assert.equal(response.status, 204);
   } finally { await f.close(); }
 });
@@ -65,11 +114,11 @@ test('API exposes settings, analytics, reminders, and exports', async () => {
     assert.equal((await response.json()).dayTime, '12:30');
     response = await api(f.base, '/api/v1/analytics');
     assert.equal((await response.json()).count, 1);
-    response = await api(f.base, '/api/v1/reminders/snooze', { method: 'POST', body: JSON.stringify({localDate:'2026-07-31',slot:'22:00',minutes:15}) });
+    response = await api(f.base, '/api/v1/reminders/snooze', { method: 'POST', body: JSON.stringify({localDate:'2026-07-31',period:'evening',minutes:15}) });
     assert.equal(response.status, 200);
     response = await api(f.base, '/api/v1/export.csv');
     const csv = await response.text();
-    assert.match(csv, /localDate,slot/);
+    assert.match(csv, /localDate,kind,period/);
     assert.match(csv, /2026-07-31/);
   } finally { await f.close(); }
 });
@@ -153,7 +202,7 @@ test('host poll drains open and close commands and reports a due reminder', asyn
       { type: 'close-window' }
     ]);
     assert.equal(payload.due.localDate, '2026-08-01');
-    assert.equal(payload.due.slot, '13:00');
+    assert.equal(payload.due.period, 'day');
 
     response = await api(base, '/api/v1/host/poll');
     assert.deepEqual((await response.json()).actions, []);

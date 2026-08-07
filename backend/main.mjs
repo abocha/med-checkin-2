@@ -193,7 +193,7 @@ supervisor.start();
 function reminderTick() {
   const now = new Date();
   const date = localDateString(now);
-  const completed = new Set(repo.listCheckins({ from: date, to: date, limit: 10 }).map((row) => `${row.localDate}|${row.slot}`));
+  const completed = new Set(repo.listCheckins({ from: date, to: date, kind: 'scheduled', limit: 10 }).map((row) => `${row.localDate}|${row.period}`));
   const due = getDueReminder(now, repo.getSettings(), completed, repo.getReminderStates(date));
   if (due && api.eventHub.size > 0) api.eventHub.broadcast('reminder', due);
 }

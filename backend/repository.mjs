@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_SETTINGS, normalizeCheckin } from './domain.mjs';
 import { createLatestSchema, LATEST_SCHEMA_VERSION } from './schema.mjs';
+import { normalizeTreatmentEvent, rowToTreatmentEvent } from './treatment.mjs';
 
 function parseJson(value, fallback) {
   try { return value ? JSON.parse(value) : fallback; } catch { return fallback; }
@@ -89,6 +90,19 @@ export function createRepository(dbPath) {
       dismissed_at=excluded.dismissed_at,
       notified_at=excluded.notified_at
   `);
+  const treatmentByIdentity = db.prepare(`
+    SELECT * FROM treatment_events
+    WHERE (effective_date = ?) OR (effective_date IS NULL AND ? IS NULL)
+  `);
+  const treatmentById = db.prepare('SELECT * FROM treatment_events WHERE id=?');
+  const treatmentInsert = db.prepare(`
+    INSERT INTO treatment_events(effective_date, regimen_json, note, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?) RETURNING *
+  `);
+  const treatmentUpdate = db.prepare(`
+    UPDATE treatment_events SET effective_date=?, regimen_json=?, note=?, updated_at=?
+    WHERE id=? RETURNING *
+  `);
 
   function buildListQuery({ from = null, to = null, kind = null, period = null } = {}) {
     const conditions = [];
@@ -159,6 +173,30 @@ export function createRepository(dbPath) {
     clearReminderState(localDate, period) {
       const semanticPeriod = period === '13:00' ? 'day' : period === '22:00' ? 'evening' : period;
       db.prepare('DELETE FROM reminder_state WHERE local_date=? AND period=?').run(localDate, semanticPeriod);
+    },
+    listTreatmentEvents() {
+      return db.prepare('SELECT * FROM treatment_events ORDER BY effective_date IS NOT NULL, effective_date, id').all().map(rowToTreatmentEvent);
+    },
+    createTreatmentEvent(input, now = new Date()) {
+      const event = normalizeTreatmentEvent(input);
+      const existing = treatmentByIdentity.get(event.effectiveDate, event.effectiveDate);
+      if (existing) throw new TypeError(event.effectiveDate === null ? 'Treatment baseline already exists' : 'Treatment date already exists');
+      const timestamp = now.toISOString();
+      return rowToTreatmentEvent(treatmentInsert.get(event.effectiveDate, JSON.stringify(event.regimen), event.note, timestamp, timestamp));
+    },
+    updateTreatmentEvent(id, input, now = new Date()) {
+      const current = treatmentById.get(Number(id));
+      if (!current) return null;
+      const event = normalizeTreatmentEvent(input);
+      const duplicate = treatmentByIdentity.get(event.effectiveDate, event.effectiveDate);
+      if (duplicate && duplicate.id !== current.id) throw new TypeError(event.effectiveDate === null ? 'Treatment baseline already exists' : 'Treatment date already exists');
+      return rowToTreatmentEvent(treatmentUpdate.get(event.effectiveDate, JSON.stringify(event.regimen), event.note, now.toISOString(), Number(id)));
+    },
+    deleteTreatmentEvent(id) { return db.prepare('DELETE FROM treatment_events WHERE id=?').run(Number(id)).changes > 0; },
+    getEffectiveTreatment(localDate) {
+      const dated = db.prepare('SELECT * FROM treatment_events WHERE effective_date IS NOT NULL AND effective_date <= ? ORDER BY effective_date DESC LIMIT 1').get(localDate);
+      const baseline = db.prepare('SELECT * FROM treatment_events WHERE effective_date IS NULL LIMIT 1').get();
+      return rowToTreatmentEvent(dated ?? baseline);
     },
     exportRows() { return db.prepare('SELECT * FROM checkins ORDER BY local_date, id').all().map(rowToCheckin); },
     checkpoint() { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); },

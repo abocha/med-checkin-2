@@ -3,7 +3,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { URL } from 'node:url';
-import { normalizeCheckin, localDateString, slotForTime } from './domain.mjs';
+import { localDateString, slotForTime } from './domain.mjs';
 import { getDueReminder } from './reminders.mjs';
 import { buildAnalytics } from './analytics.mjs';
 
@@ -92,7 +92,7 @@ function csvEscape(value) {
 
 export function rowsToCsv(rows) {
   const fields = [
-    'localDate','slot','recordedAt','updatedAt','mood','anxiety','irritability','energy','focus','functioning',
+    'localDate','kind','period','scheduledFor','observedAt','recordedAt','updatedAt','mood','anxiety','irritability','energy','focus','functioning',
     'sleepQuality','appetite','nightSleepHours','daySleepHours','sleepStart','wakeTime','context','symptoms','activation','notes','redFlags'
   ];
   return [fields.join(','), ...rows.map((row) => fields.map((field) => csvEscape(row[field])).join(','))].join('\r\n');
@@ -104,8 +104,6 @@ function safeSettings(input, current) {
   if (/^([01]\d|2[0-3]):[0-5]\d$/.test(input.eveningTime ?? '')) result.eveningTime = input.eveningTime;
   if (Number.isFinite(Number(input.catchupHours))) result.catchupHours = Math.min(12, Math.max(1, Number(input.catchupHours)));
   if (Number.isFinite(Number(input.repeatMinutes))) result.repeatMinutes = Math.min(240, Math.max(15, Number(input.repeatMinutes)));
-  if (/^\d{4}-\d{2}-\d{2}$/.test(input.treatmentChangeDate ?? '')) result.treatmentChangeDate = input.treatmentChangeDate;
-  if (typeof input.medicationLabel === 'string') result.medicationLabel = input.medicationLabel.trim().slice(0, 300);
   if (input.remindersPausedUntil === null || typeof input.remindersPausedUntil === 'string') result.remindersPausedUntil = input.remindersPausedUntil;
   return result;
 }
@@ -183,33 +181,41 @@ export function createHttpServer({ repo, token, dataDir, resourcesDir = null, ho
       const currentTime = now();
       const localDate = localDateString(currentTime);
       const slot = slotForTime(currentTime, repo.getSettings());
+      const period = slot === '13:00' ? 'day' : 'evening';
       return json(res, 200, {
         settings: repo.getSettings(),
-        current: { localDate, slot, checkin: repo.getCheckin(localDate, slot) },
-        recent: repo.listCheckins({ limit: 6 })
+        current: { localDate, period, checkin: repo.getScheduledCheckin(localDate, period) },
+        recent: repo.listCheckins({ limit: 6 }),
+        currentTreatment: repo.getEffectiveTreatment(localDate)
       });
     }
 
     if (url.pathname === '/api/v1/checkins' && req.method === 'POST') {
       const body = await readBody(req);
-      const normalized = normalizeCheckin(body, new Date());
-      const saved = repo.upsertCheckin(normalized);
-      repo.clearReminderState(saved.localDate, saved.slot);
+      if (body.kind === 'scheduled') {
+        const existing = repo.getScheduledCheckin(body.localDate, body.period);
+        if (existing) return json(res, 409, { error: 'scheduled_exists', existing });
+      }
+      const saved = repo.createCheckin(body, now());
+      if (saved.kind === 'scheduled') repo.clearReminderState(saved.localDate, saved.period);
       await onPersisted();
       eventHub.broadcast('checkin-saved', saved);
-      return json(res, 200, saved);
+      return json(res, 201, saved);
     }
 
     if (url.pathname === '/api/v1/checkins' && req.method === 'GET') {
       return json(res, 200, { items: repo.listCheckins({
         limit: url.searchParams.get('limit') ?? 100,
         offset: url.searchParams.get('offset') ?? 0,
-        from: url.searchParams.get('from'), to: url.searchParams.get('to')
+        from: url.searchParams.get('from'), to: url.searchParams.get('to'),
+        kind: url.searchParams.get('kind'), period: url.searchParams.get('period')
       }) });
     }
 
     if (url.pathname === '/api/v1/checkin' && req.method === 'GET') {
-      const item = repo.getCheckin(url.searchParams.get('date'), url.searchParams.get('slot'));
+      const requestedPeriod = url.searchParams.get('period')
+        ?? (url.searchParams.get('slot') === '13:00' ? 'day' : url.searchParams.get('slot') === '22:00' ? 'evening' : null);
+      const item = repo.getScheduledCheckin(url.searchParams.get('date'), requestedPeriod);
       return json(res, item ? 200 : 404, item ?? { error: 'not_found' });
     }
 
@@ -217,6 +223,15 @@ export function createHttpServer({ repo, token, dataDir, resourcesDir = null, ho
     if (checkinId && req.method === 'GET') {
       const item = repo.getCheckinById(checkinId[1]);
       return json(res, item ? 200 : 404, item ?? { error: 'not_found' });
+    }
+    if (checkinId && req.method === 'PUT') {
+      const body = await readBody(req);
+      const saved = repo.updateCheckin(checkinId[1], body, now());
+      if (!saved) return json(res, 404, { error: 'not_found' });
+      if (saved.kind === 'scheduled') repo.clearReminderState(saved.localDate, saved.period);
+      await onPersisted();
+      eventHub.broadcast('checkin-saved', saved);
+      return json(res, 200, saved);
     }
     if (checkinId && req.method === 'DELETE') {
       const deleted = repo.deleteCheckin(checkinId[1]);
@@ -234,6 +249,30 @@ export function createHttpServer({ repo, token, dataDir, resourcesDir = null, ho
       return json(res, 200, saved);
     }
 
+    if (url.pathname === '/api/v1/treatment-events' && req.method === 'GET') {
+      return json(res, 200, { items: repo.listTreatmentEvents() });
+    }
+    if (url.pathname === '/api/v1/treatment-events' && req.method === 'POST') {
+      const saved = repo.createTreatmentEvent(await readBody(req), now());
+      await onPersisted();
+      eventHub.broadcast('treatment-changed', saved);
+      return json(res, 201, saved);
+    }
+    const treatmentId = url.pathname.match(/^\/api\/v1\/treatment-events\/(\d+)$/);
+    if (treatmentId && req.method === 'PUT') {
+      const saved = repo.updateTreatmentEvent(treatmentId[1], await readBody(req), now());
+      if (!saved) return json(res, 404, { error: 'not_found' });
+      await onPersisted();
+      eventHub.broadcast('treatment-changed', saved);
+      return json(res, 200, saved);
+    }
+    if (treatmentId && req.method === 'DELETE') {
+      if (!repo.deleteTreatmentEvent(treatmentId[1])) return json(res, 404, { error: 'not_found' });
+      await onPersisted();
+      eventHub.broadcast('treatment-changed', { deletedId: Number(treatmentId[1]) });
+      res.writeHead(204); return res.end();
+    }
+
     if (url.pathname === '/api/v1/analytics' && req.method === 'GET') {
       return json(res, 200, buildAnalytics(repo.listCheckins({ limit: 1000 }), repo.getSettings()));
     }
@@ -241,7 +280,7 @@ export function createHttpServer({ repo, token, dataDir, resourcesDir = null, ho
     if (url.pathname === '/api/v1/reminders/due' && req.method === 'GET') {
       const currentTime = now();
       const date = localDateString(currentTime);
-      const completed = new Set(repo.listCheckins({ from: date, to: date, limit: 10 }).map((row) => `${row.localDate}|${row.slot}`));
+      const completed = new Set(repo.listCheckins({ from: date, to: date, kind: 'scheduled', limit: 10 }).map((row) => `${row.localDate}|${row.period}`));
       const due = getDueReminder(currentTime, repo.getSettings(), completed, repo.getReminderStates(date));
       return json(res, 200, { due });
     }
@@ -249,7 +288,7 @@ export function createHttpServer({ repo, token, dataDir, resourcesDir = null, ho
     if (url.pathname === '/api/v1/host/poll' && req.method === 'GET') {
       const currentTime = now();
       const date = localDateString(currentTime);
-      const completed = new Set(repo.listCheckins({ from: date, to: date, limit: 10 }).map((row) => `${row.localDate}|${row.slot}`));
+      const completed = new Set(repo.listCheckins({ from: date, to: date, kind: 'scheduled', limit: 10 }).map((row) => `${row.localDate}|${row.period}`));
       const due = getDueReminder(currentTime, repo.getSettings(), completed, repo.getReminderStates(date));
       return json(res, 200, { actions: hostActions?.drain() ?? [], due });
     }
@@ -257,14 +296,14 @@ export function createHttpServer({ repo, token, dataDir, resourcesDir = null, ho
     const reminderAction = url.pathname.match(/^\/api\/v1\/reminders\/(snooze|dismiss|notified)$/);
     if (reminderAction && req.method === 'POST') {
       const body = await readBody(req);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(body.localDate ?? '') || !['13:00','22:00'].includes(body.slot)) return json(res, 400, { error: 'invalid_reminder' });
-      const now = new Date();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(body.localDate ?? '') || !['day','evening'].includes(body.period)) return json(res, 400, { error: 'invalid_reminder' });
+      const currentTime = now();
       const patch = reminderAction[1] === 'snooze'
-        ? { snoozedUntil: new Date(now.getTime() + Math.max(15, Number(body.minutes) || 30) * 60000).toISOString(), notifiedAt: null }
+        ? { snoozedUntil: new Date(currentTime.getTime() + Math.max(15, Number(body.minutes) || repo.getSettings().repeatMinutes) * 60000).toISOString(), notifiedAt: null }
         : reminderAction[1] === 'dismiss'
-          ? { dismissedAt: now.toISOString() }
-          : { notifiedAt: now.toISOString() };
-      return json(res, 200, repo.saveReminderState(body.localDate, body.slot, patch));
+          ? { dismissedAt: currentTime.toISOString() }
+          : { notifiedAt: currentTime.toISOString() };
+      return json(res, 200, repo.saveReminderState(body.localDate, body.period, patch));
     }
 
     if (url.pathname === '/api/v1/export.csv' && req.method === 'GET') return text(res, 200, rowsToCsv(repo.exportRows()), 'text/csv; charset=utf-8');
@@ -285,7 +324,8 @@ export function createHttpServer({ repo, token, dataDir, resourcesDir = null, ho
   server = http.createServer((req, res) => {
     route(req, res).catch((error) => {
       if (res.headersSent) return res.destroy(error);
-      json(res, error.statusCode ?? 500, { error: error.statusCode ? error.message : 'internal_error' });
+      const status = error.statusCode ?? (error instanceof TypeError ? 400 : 500);
+      json(res, status, { error: status < 500 ? error.message : 'internal_error' });
     });
   });
 
