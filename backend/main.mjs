@@ -12,6 +12,7 @@ import { backupDatabase } from './backups.mjs';
 import { terminateOwnedProcess } from './process-safety.mjs';
 import { createHostActionQueue } from './host-actions.mjs';
 import { prepareDatabase } from './migrations.mjs';
+import { createDataMaintenance } from './data-maintenance.mjs';
 
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const args = new Set(process.argv.slice(2));
@@ -151,6 +152,27 @@ const supervisor = hostExecutable
       get running() { return false; }
     };
 
+async function restartAfterMaintenance() {
+  clearInterval(reminderTimer);
+  supervisor.stop();
+  try { await api.close(); } catch {}
+  spawnDetached([]);
+  process.exit(0);
+}
+
+const maintenance = createDataMaintenance({ repo, dbPath: DB_PATH, backupDir: BACKUP_DIR });
+const restoreBackup = maintenance.restoreBackup;
+maintenance.restoreBackup = (name) => {
+  try {
+    const result = restoreBackup(name);
+    setTimeout(restartAfterMaintenance, 250).unref?.();
+    return result;
+  } catch (error) {
+    if (error.repositoryClosed) setTimeout(restartAfterMaintenance, 250).unref?.();
+    throw error;
+  }
+};
+
 async function shutdown({ intentional = false } = {}) {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -164,7 +186,7 @@ async function shutdown({ intentional = false } = {}) {
 }
 
 api = createHttpServer({
-  repo, token, dataDir: DATA_DIR, resourcesDir: join(APP_ROOT, 'resources'), hostActions,
+  repo, token, dataDir: DATA_DIR, resourcesDir: join(APP_ROOT, 'resources'), hostActions, maintenance,
   onPersisted: persistBackup,
   onControl: async (command) => {
     if (command === 'restart-host') supervisor.restart();

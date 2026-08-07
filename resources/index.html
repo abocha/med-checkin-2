@@ -191,10 +191,23 @@
           </form>
           <div id="treatment-events" class="treatment-events"></div>
         </section>
-        <section class="card">
+        <section class="card maintenance-card">
           <h3>Экспорт и резервные копии</h3>
-          <p class="muted">CSV удобно анализировать, JSON сохраняет полную структуру. Автоматические копии базы хранятся 30 дней.</p>
+          <p class="muted">CSV удобно анализировать, а переносимый JSON можно проверить и затем использовать для полной замены данных.</p>
           <div class="button-row"><button type="button" class="secondary" id="export-csv">Экспорт CSV</button><button type="button" class="secondary" id="export-json">Экспорт JSON</button></div>
+          <div class="maintenance-grid">
+            <div>
+              <h4>Резервные копии базы</h4>
+              <label>Доступная копия<select id="backup-list"><option value="">Копий пока нет</option></select></label>
+              <div class="button-row"><button type="button" class="secondary" id="create-backup">Создать копию</button><button type="button" class="danger" id="restore-backup">Восстановить выбранную</button></div>
+            </div>
+            <div>
+              <h4>Импорт JSON</h4>
+              <label>Файл экспорта<input type="file" id="import-json" accept="application/json,.json"></label>
+              <pre id="import-preview" class="import-preview">Сначала выберите файл. Данные не изменятся до подтверждения замены.</pre>
+              <button type="button" class="danger" id="replace-import" disabled>Заменить все переносимые данные</button>
+            </div>
+          </div>
         </section>
         <section class="card privacy-card"><h3>Приватность</h3><p>Данные остаются на этом компьютере. Приложение не создаёт аккаунт, не отправляет телеметрию и не обращается в интернет.</p></section>
       </section>

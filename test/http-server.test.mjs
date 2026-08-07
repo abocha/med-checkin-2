@@ -1,16 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRepository } from '../backend/repository.mjs';
 import { createHttpServer } from '../backend/http-server.mjs';
 import { createHostActionQueue } from '../backend/host-actions.mjs';
+import { createDataMaintenance } from '../backend/data-maintenance.mjs';
 
 async function fixture(options = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'med-checkin-api-'));
-  const repo = createRepository(join(dir, 'test.sqlite'));
-  const app = createHttpServer({ repo, token: 'secret-token', dataDir: dir, resourcesDir: new URL('../resources/', import.meta.url), now: () => new Date('2026-08-07T01:02:03.000Z'), ...options });
+  const dbPath = join(dir, 'test.sqlite');
+  const backupDir = join(dir, 'backups');
+  const repo = createRepository(dbPath);
+  const clock = options.now ?? (() => new Date('2026-08-07T01:02:03.000Z'));
+  const maintenance = options.maintenance ?? createDataMaintenance({ repo, dbPath, backupDir, now: clock });
+  const app = createHttpServer({ repo, token: 'secret-token', dataDir: dir, resourcesDir: new URL('../resources/', import.meta.url), now: clock, maintenance, ...options });
   await app.listen(0);
   const base = `http://127.0.0.1:${app.port}`;
   return { dir, repo, app, base, close: async () => { await app.close(); repo.close(); rmSync(dir, {recursive:true, force:true}); } };
@@ -61,6 +66,60 @@ test('API creates, edits, filters, reads, and deletes semantic observations', as
     assert.equal((await response.json()).items.length, 1);
     response = await api(f.base, `/api/v1/checkins/${first.id}`, { method: 'DELETE' });
     assert.equal(response.status, 204);
+  } finally { await f.close(); }
+});
+
+test('API exports, previews, and replaces only versioned portable data', async () => {
+  const f = await fixture();
+  try {
+    await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify(body) });
+    let response = await api(f.base, '/api/v1/export.json');
+    const exported = await response.json();
+    assert.equal(exported.format, 'med-checkin-2');
+    assert.equal(exported.formatVersion, 1);
+    assert.equal(exported.observations.length, 1);
+    assert.equal('remindersPausedUntil' in exported.settings, false);
+
+    response = await api(f.base, '/api/v1/import/preview', { method: 'POST', body: JSON.stringify(exported) });
+    assert.equal((await response.json()).observationCount, 1);
+    const largeExport = {
+      ...exported,
+      observations: Array.from({ length: 40 }, (_, index) => ({
+        ...exported.observations[0], id: index + 100, kind: 'extra', period: null, scheduledFor: null,
+        notes: 'x'.repeat(8000)
+      }))
+    };
+    response = await api(f.base, '/api/v1/import/preview', { method: 'POST', body: JSON.stringify(largeExport) });
+    assert.equal((await response.json()).observationCount, 40);
+    response = await api(f.base, '/api/v1/import/preview', { method: 'POST', body: JSON.stringify({ ...exported, formatVersion: 9 }) });
+    assert.equal(response.status, 400);
+    assert.equal(f.repo.listAllCheckins().length, 1);
+
+    exported.observations[0].id = 77;
+    exported.observations[0].notes = 'replaced';
+    response = await api(f.base, '/api/v1/import/replace', { method: 'POST', body: JSON.stringify(exported) });
+    assert.equal(response.status, 200);
+    assert.equal(f.repo.listAllCheckins()[0].id, 77);
+    assert.equal(f.repo.listAllCheckins()[0].notes, 'replaced');
+    assert.equal(readdirSync(join(f.dir, 'backups')).some((name) => name.startsWith('pre-import-')), true);
+  } finally { await f.close(); }
+});
+
+test('API creates and lists backups and forwards recognized restore selection', async () => {
+  const restored = [];
+  const f = await fixture({ maintenance: {
+    listBackups: () => [{ name: 'manual-20260807T010203Z.sqlite', size: 123, modifiedAt: '2026-08-07T01:02:03.000Z' }],
+    createBackup: () => ({ name: 'manual-20260807T010203Z.sqlite' }),
+    restoreBackup: (name) => { restored.push(name); return { name, restartRequired: true }; }
+  } });
+  try {
+    let response = await api(f.base, '/api/v1/backups');
+    assert.equal((await response.json()).items[0].name, 'manual-20260807T010203Z.sqlite');
+    response = await api(f.base, '/api/v1/backups', { method: 'POST' });
+    assert.equal(response.status, 201);
+    response = await api(f.base, '/api/v1/backups/restore', { method: 'POST', body: JSON.stringify({ name: 'manual-20260807T010203Z.sqlite' }) });
+    assert.equal(response.status, 200);
+    assert.deepEqual(restored, ['manual-20260807T010203Z.sqlite']);
   } finally { await f.close(); }
 });
 

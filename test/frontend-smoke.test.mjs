@@ -35,6 +35,14 @@ test('frontend exposes bounded history filters, treatment events, and completion
   assert.match(js, /observedAt/);
 });
 
+test('frontend exposes backup restore and Replace-only JSON import controls', () => {
+  for (const id of ['create-backup', 'restore-backup', 'backup-list', 'import-json', 'import-preview', 'replace-import']) {
+    assert.match(html, new RegExp(`id=["']${id}["']`));
+  }
+  assert.match(js, /\/api\/v1\/import\/preview/);
+  assert.match(js, /\/api\/v1\/import\/replace/);
+});
+
 test('frontend includes secondary sleep, context, symptom, activation, and red flag fields', () => {
   for (const name of ['nightSleepHours','daySleepHours','sleepStart','wakeTime','notes','redFlags']) {
     assert.match(html, new RegExp(`name=["']${name}["']`));

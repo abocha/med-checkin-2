@@ -103,6 +103,18 @@ export function createRepository(dbPath) {
     UPDATE treatment_events SET effective_date=?, regimen_json=?, note=?, updated_at=?
     WHERE id=? RETURNING *
   `);
+  const portableObservationInsert = db.prepare(`
+    INSERT INTO checkins (
+      id, kind, local_date, period, scheduled_for, observed_at, recorded_at, updated_at,
+      mood, anxiety, irritability, energy, focus, functioning, sleep_quality, appetite,
+      night_sleep_hours, day_sleep_hours, sleep_start, wake_time, context_json,
+      symptoms_json, activation_json, notes, red_flags
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const portableTreatmentInsert = db.prepare(`
+    INSERT INTO treatment_events(id, effective_date, regimen_json, note, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
 
   function buildListQuery({ from = null, to = null, kind = null, period = null } = {}) {
     const conditions = [];
@@ -200,6 +212,34 @@ export function createRepository(dbPath) {
       const dated = db.prepare('SELECT * FROM treatment_events WHERE effective_date IS NOT NULL AND effective_date <= ? ORDER BY effective_date DESC LIMIT 1').get(localDate);
       const baseline = db.prepare('SELECT * FROM treatment_events WHERE effective_date IS NULL LIMIT 1').get();
       return rowToTreatmentEvent(dated ?? baseline);
+    },
+    replacePortableData(data, now = new Date()) {
+      const fallbackTimestamp = now.toISOString();
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.exec('DELETE FROM checkins; DELETE FROM treatment_events;');
+        db.prepare("DELETE FROM sqlite_sequence WHERE name IN ('checkins','treatment_events')").run();
+        for (const observation of data.observations) {
+          portableObservationInsert.run(
+            observation.id ?? null,
+            ...observationValues(observation, observation.recordedAt ?? fallbackTimestamp, observation.updatedAt ?? observation.recordedAt ?? fallbackTimestamp)
+          );
+        }
+        for (const event of data.treatmentEvents) {
+          portableTreatmentInsert.run(
+            event.id ?? null, event.effectiveDate, JSON.stringify(event.regimen), event.note,
+            event.createdAt ?? fallbackTimestamp, event.updatedAt ?? event.createdAt ?? fallbackTimestamp
+          );
+        }
+        for (const key of ['dayTime', 'eveningTime', 'catchupHours', 'repeatMinutes']) {
+          settingUpsert.run(key, JSON.stringify(data.settings[key]));
+        }
+        db.exec('COMMIT');
+        return { observationsReplaced: data.observations.length, treatmentEventsReplaced: data.treatmentEvents.length };
+      } catch (error) {
+        try { db.exec('ROLLBACK'); } catch {}
+        throw error;
+      }
     },
     exportRows() { return db.prepare('SELECT * FROM checkins ORDER BY local_date, id').all().map(rowToCheckin); },
     checkpoint() { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); },

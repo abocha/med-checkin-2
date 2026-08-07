@@ -79,10 +79,12 @@ input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
 .sticky-actions { position: sticky; bottom: 12px; display: flex; align-items: center; justify-content: space-between; gap: 16px; background: color-mix(in srgb, var(--paper) 94%, transparent); backdrop-filter: blur(14px); border: 1px solid var(--line); box-shadow: var(--shadow); padding: 13px 15px; border-radius: 15px; z-index: 8; }
 .button-row { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
 .button-row.compact button { padding: 7px 10px; }
-button.primary, button.secondary, button.ghost { border-radius: 10px; padding: 10px 14px; font-weight: 750; }
+button.primary, button.secondary, button.ghost, button.danger { border-radius: 10px; padding: 10px 14px; font-weight: 750; }
 button.primary { border: 1px solid var(--accent); background: var(--accent); color: #fff; }
 button.secondary { border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
 button.ghost { border: 1px solid transparent; background: transparent; color: var(--muted); }
+button.danger { border: 1px solid var(--danger); background: var(--danger-soft); color: var(--danger); }
+button:disabled { cursor: not-allowed; opacity: .55; }
 .slot-switch { display: flex; padding: 4px; border: 1px solid var(--line); border-radius: 11px; background: var(--paper-2); }
 .slot-switch button { border: 0; background: transparent; color: var(--muted); padding: 7px 10px; border-radius: 8px; font-weight: 800; }
 .slot-switch button.active { background: var(--accent); color: #fff; }
@@ -126,6 +128,11 @@ button.ghost { border: 1px solid transparent; background: transparent; color: va
 .treatment-event { border-top: 1px solid var(--line); padding-top: 12px; display: grid; grid-template-columns: 1fr auto; gap: 12px; }
 .treatment-event h4 { margin: 0 0 4px; }
 .treatment-event p { color: var(--muted); font-size: 13px; }
+.maintenance-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px; margin-top: 18px; }
+.maintenance-grid > div { display: grid; align-content: start; gap: 11px; padding: 15px; border: 1px solid var(--line); border-radius: 13px; background: var(--paper-2); }
+.maintenance-grid h4 { margin: 0; }
+.maintenance-grid label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; font-weight: 700; }
+.import-preview { min-height: 92px; margin: 0; white-space: pre-wrap; color: var(--muted); font: 13px/1.5 inherit; }
 .privacy-card { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
 .toast { position: fixed; right: 22px; bottom: 22px; background: var(--ink); color: var(--paper); padding: 11px 14px; border-radius: 11px; opacity: 0; transform: translateY(8px); pointer-events: none; transition: .2s; box-shadow: var(--shadow); }
 .toast.show { opacity: 1; transform: translateY(0); }
@@ -134,7 +141,7 @@ button.ghost { border: 1px solid transparent; background: transparent; color: va
 .decision-dialog p { margin-bottom: 18px; }
 .empty { padding: 30px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 15px; }
 @media (max-width: 800px) {
-  .scale-grid, .input-grid, .check-grid, .two-column, .observation-card, .history-filters, .treatment-medication { grid-template-columns: 1fr; }
+  .scale-grid, .input-grid, .check-grid, .two-column, .observation-card, .history-filters, .treatment-medication, .maintenance-grid { grid-template-columns: 1fr; }
   .kpi-grid { grid-template-columns: repeat(2,1fr); }
   .history-item { grid-template-columns: 1fr; }
   .view-heading { align-items: flex-start; }

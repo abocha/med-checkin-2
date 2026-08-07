@@ -6,8 +6,10 @@ import { URL } from 'node:url';
 import { localDateString, slotForTime } from './domain.mjs';
 import { getDueReminder } from './reminders.mjs';
 import { buildAnalytics } from './analytics.mjs';
+import { buildPortableExport } from './data-maintenance.mjs';
 
 const BODY_LIMIT = 256 * 1024;
+const PORTABLE_BODY_LIMIT = 16 * 1024 * 1024;
 
 const ASSET_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -57,14 +59,14 @@ function text(res, status, value, contentType = 'text/plain; charset=utf-8') {
   res.end(value);
 }
 
-function readBody(req) {
+function readBody(req, limit = BODY_LIMIT) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
     let tooLarge = false;
     req.on('data', (chunk) => {
       size += chunk.length;
-      if (size > BODY_LIMIT) {
+      if (size > limit) {
         tooLarge = true;
         return;
       }
@@ -123,7 +125,7 @@ export function createEventHub() {
   };
 }
 
-export function createHttpServer({ repo, token, dataDir, resourcesDir = null, hostActions = null, now = () => new Date(), eventHub = createEventHub(), onControl = async () => {}, onPersisted = async () => {} }) {
+export function createHttpServer({ repo, token, dataDir, resourcesDir = null, hostActions = null, maintenance = null, now = () => new Date(), eventHub = createEventHub(), onControl = async () => {}, onPersisted = async () => {} }) {
   const resourceRoot = resolveResourceRoot(resourcesDir);
   let server;
   let port = null;
@@ -322,8 +324,20 @@ export function createHttpServer({ repo, token, dataDir, resourcesDir = null, ho
       return json(res, 200, repo.saveReminderState(body.localDate, body.period, patch));
     }
 
+    if (url.pathname === '/api/v1/backups' && req.method === 'GET') return json(res, 200, { items: maintenance?.listBackups() ?? [] });
+    if (url.pathname === '/api/v1/backups' && req.method === 'POST') return json(res, 201, maintenance.createBackup());
+    if (url.pathname === '/api/v1/backups/restore' && req.method === 'POST') {
+      const body = await readBody(req);
+      return json(res, 200, maintenance.restoreBackup(body.name));
+    }
+    if (url.pathname === '/api/v1/import/preview' && req.method === 'POST') return json(res, 200, maintenance.previewImport(await readBody(req, PORTABLE_BODY_LIMIT)));
+    if (url.pathname === '/api/v1/import/replace' && req.method === 'POST') {
+      const result = maintenance.replaceImport(await readBody(req, PORTABLE_BODY_LIMIT));
+      eventHub.broadcast('data-replaced', result);
+      return json(res, 200, result);
+    }
     if (url.pathname === '/api/v1/export.csv' && req.method === 'GET') return text(res, 200, rowsToCsv(repo.exportRows()), 'text/csv; charset=utf-8');
-    if (url.pathname === '/api/v1/export.json' && req.method === 'GET') return json(res, 200, { exportedAt: new Date().toISOString(), checkins: repo.exportRows(), settings: repo.getSettings() });
+    if (url.pathname === '/api/v1/export.json' && req.method === 'GET') return json(res, 200, maintenance?.exportPortable() ?? buildPortableExport(repo, now()));
 
     const control = url.pathname.match(/^\/api\/v1\/control\/(show|close-window|restart-host|quit|heartbeat)$/);
     if (control && req.method === 'POST') {

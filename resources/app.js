@@ -2,7 +2,7 @@
 const state = {
   apiBase: null, token: null, settings: null, currentDate: null, currentKind: 'scheduled', currentPeriod: 'day',
   currentRecord: null, activeReminder: null, eventSource: null, toastTimer: null, extraDraftKey: null,
-  dirty: false, draftTimer: null, suppressDirty: false, historyOffset: 0, historyItems: [], treatmentEvents: []
+  dirty: false, draftTimer: null, suppressDirty: false, historyOffset: 0, historyItems: [], treatmentEvents: [], pendingImport: null
 };
 
 const metricLabels = {
@@ -496,7 +496,7 @@ async function saveTreatmentEvent(event) {
 
 async function fillSettings() {
   if (state.settings) for (const [key, value] of Object.entries(state.settings)) if ($('#settings-form').elements[key]) $('#settings-form').elements[key].value = value ?? '';
-  await loadTreatmentEvents();
+  await Promise.all([loadTreatmentEvents(), loadBackups()]);
 }
 async function saveSettings(event) {
   event.preventDefault(); const data = Object.fromEntries(new FormData(event.currentTarget).entries()); data.catchupHours = Number(data.catchupHours); data.repeatMinutes = Number(data.repeatMinutes);
@@ -506,6 +506,48 @@ async function updatePause(until) { state.settings = await api('/api/v1/settings
 async function exportFile(format) {
   const content = await api(`/api/v1/export.${format}`); const extension = format === 'csv' ? 'csv' : 'json'; const body = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
   const url = URL.createObjectURL(new Blob([body], { type: extension === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8' })); const link = document.createElement('a'); link.href = url; link.download = `med-checkin-${localDate()}.${extension}`; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); toast('Экспорт подготовлен');
+}
+async function loadBackups() {
+  const { items } = await api('/api/v1/backups');
+  const list = $('#backup-list');
+  list.innerHTML = items.length
+    ? items.map(item => `<option value="${escapeHtml(item.name)}">${escapeHtml(item.name)} · ${Math.ceil(item.size / 1024)} КБ</option>`).join('')
+    : '<option value="">Копий пока нет</option>';
+  $('#restore-backup').disabled = !items.length;
+}
+async function createBackupNow() {
+  try { await api('/api/v1/backups', { method: 'POST' }); await loadBackups(); toast('Резервная копия создана'); }
+  catch (error) { toast(`Не удалось создать копию: ${error.message}`); }
+}
+async function restoreSelectedBackup() {
+  const name = $('#backup-list').value;
+  if (!name || !confirm(`Восстановить ${name}? Текущее состояние будет сохранено отдельно, затем приложение перезапустится.`)) return;
+  try {
+    await api('/api/v1/backups/restore', { method: 'POST', body: JSON.stringify({ name }) });
+    toast('Копия восстановлена. Приложение перезапускается…');
+  } catch (error) { toast(`Не удалось восстановить копию: ${error.message}`); }
+}
+async function selectImportFile(event) {
+  state.pendingImport = null; $('#replace-import').disabled = true;
+  const file = event.target.files[0];
+  if (!file) { $('#import-preview').textContent = 'Сначала выберите файл. Данные не изменятся до подтверждения замены.'; return; }
+  try {
+    const payload = JSON.parse(await file.text());
+    const preview = await api('/api/v1/import/preview', { method: 'POST', body: JSON.stringify(payload) });
+    state.pendingImport = payload;
+    $('#import-preview').textContent = `Наблюдений: ${preview.observationCount} (дополнительных: ${preview.extraCount})\nИзменений лечения: ${preview.treatmentEventCount}\nПериод: ${preview.dateFrom || '—'} — ${preview.dateTo || '—'}`;
+    $('#replace-import').disabled = false;
+  } catch (error) { $('#import-preview').textContent = `Файл не принят: ${error.message}`; }
+}
+async function replaceFromImport() {
+  if (!state.pendingImport || !confirm('Полностью заменить наблюдения, историю лечения и переносимые настройки данными из файла? Перед заменой будет создана резервная копия.')) return;
+  try {
+    const result = await api('/api/v1/import/replace', { method: 'POST', body: JSON.stringify(state.pendingImport) });
+    state.pendingImport = null; $('#replace-import').disabled = true; $('#import-json').value = '';
+    $('#import-preview').textContent = `Заменено наблюдений: ${result.observationCount}. Резервная копия создана.`;
+    MedCheckinDrafts.remove(draftKey()); state.dirty = false;
+    toast('Данные заменены из JSON'); setTimeout(() => window.location.reload(), 400);
+  } catch (error) { toast(`Не удалось заменить данные: ${error.message}`); }
 }
 async function closeWindow() { if (!await confirmLeavingDirty()) return; try { await api('/api/v1/control/close-window', { method: 'POST' }); } catch {} setTimeout(() => window.close(), 100); }
 
@@ -540,6 +582,7 @@ function wireUi() {
   $('#add-treatment-medication').addEventListener('click', () => { const regimen = treatmentFormRegimen(); regimen.push({ name: '', amount: '', unit: 'mg', timing: '' }); renderRegimenFields(regimen); });
   $('#treatment-event-form').elements.effectiveDate.addEventListener('change', event => { if (!$('#treatment-event-form').dataset.editing && event.target.value) renderRegimenFields(effectiveRegimen(dateDaysBefore(event.target.value, 1))); });
   $('#pause-two-hours').addEventListener('click', () => updatePause(new Date(Date.now() + 2 * 3600000).toISOString())); $('#resume-reminders').addEventListener('click', () => updatePause(null)); $('#export-csv').addEventListener('click', () => exportFile('csv')); $('#export-json').addEventListener('click', () => exportFile('json'));
+  $('#create-backup').addEventListener('click', createBackupNow); $('#restore-backup').addEventListener('click', restoreSelectedBackup); $('#import-json').addEventListener('change', selectImportFile); $('#replace-import').addEventListener('click', replaceFromImport);
   $('#snooze-reminder').addEventListener('click', async () => { if (!state.activeReminder) return; const { localDate: date, period } = state.activeReminder.due; await api('/api/v1/reminders/snooze', { method: 'POST', body: JSON.stringify({ localDate: date, period, minutes: state.settings?.repeatMinutes || 30 }) }); $('#reminder-banner').classList.add('hidden'); state.activeReminder = null; await closeWindow(); });
   $('#dismiss-reminder').addEventListener('click', async () => { if (!state.activeReminder) return; const { localDate: date, period } = state.activeReminder.due; await api('/api/v1/reminders/dismiss', { method: 'POST', body: JSON.stringify({ localDate: date, period }) }); $('#reminder-banner').classList.add('hidden'); state.activeReminder = null; await closeWindow(); });
   window.addEventListener('beforeunload', event => { if (!state.dirty) return; persistDraft(); event.preventDefault(); event.returnValue = ''; });
