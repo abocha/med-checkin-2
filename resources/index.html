@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Med Check-in 2.1.1</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">личный журнал состояния</p>
+        <h1>Med Check-in <span>2.1</span></h1>
+        <p id="medication-label" class="medication-label">Эсциталопрам 10 мг · Атомоксетин 80 мг</p>
+      </div>
+      <div class="header-status">
+        <span id="connection-dot" class="status-dot" aria-hidden="true"></span>
+        <span id="connection-label">Подключение…</span>
+      </div>
+    </header>
+
+    <nav class="tabs" aria-label="Разделы">
+      <button type="button" class="tab active" data-view="checkin">Отметить состояние</button>
+      <button type="button" class="tab" data-view="history">История</button>
+      <button type="button" class="tab" data-view="analytics">Графики</button>
+      <button type="button" class="tab" data-view="settings">Настройки</button>
+    </nav>
+
+    <main>
+      <section id="view-checkin" class="view active">
+        <div class="view-heading">
+          <div>
+            <p id="checkin-kicker" class="eyebrow">текущий чек-ин</p>
+            <h2 id="checkin-title">Дневной чек-ин</h2>
+            <p id="checkin-subtitle" class="muted">Сегодня · 13:00</p>
+          </div>
+          <div class="slot-switch" role="group" aria-label="Время чек-ина">
+            <button type="button" data-slot="13:00">13:00</button>
+            <button type="button" data-slot="22:00">22:00</button>
+          </div>
+        </div>
+
+        <div id="reminder-banner" class="reminder-banner hidden">
+          <div><strong>Напоминание активно</strong><span id="reminder-copy">Пора отметить состояние.</span></div>
+          <div class="button-row compact">
+            <button type="button" class="secondary" id="snooze-reminder">Через 30 минут</button>
+            <button type="button" class="ghost" id="dismiss-reminder">Сегодня пропустить</button>
+          </div>
+        </div>
+
+        <form id="checkin-form" autocomplete="off">
+          <input type="hidden" name="localDate">
+          <input type="hidden" name="slot">
+
+          <section class="card">
+            <div class="section-heading">
+              <div><h3>Как ты сейчас?</h3><p>Быстрая часть. Все шкалы от 0 до 10.</p></div>
+              <span id="edit-state" class="pill">Новая запись</span>
+            </div>
+
+            <div class="scale-grid">
+              <label class="scale-row"><span>Настроение</span><input type="range" name="mood" min="0" max="10" step="1" value="7"><output>7</output></label>
+              <label class="scale-row"><span>Тревога</span><input type="range" name="anxiety" min="0" max="10" step="1" value="1"><output>1</output></label>
+              <label class="scale-row"><span>Раздражительность</span><input type="range" name="irritability" min="0" max="10" step="1" value="1"><output>1</output></label>
+              <label class="scale-row"><span>Энергия</span><input type="range" name="energy" min="0" max="10" step="1" value="6"><output>6</output></label>
+              <label class="scale-row"><span>Концентрация</span><input type="range" name="focus" min="0" max="10" step="1" value="6"><output>6</output></label>
+              <label class="scale-row"><span>Функционирование</span><input type="range" name="functioning" min="0" max="10" step="1" value="7"><output>7</output></label>
+              <label class="scale-row"><span>Качество сна</span><input type="range" name="sleepQuality" min="0" max="10" step="1" value="6"><output>6</output></label>
+              <label class="scale-row"><span>Аппетит</span><input type="range" name="appetite" min="0" max="10" step="1" value="5"><output>5</output></label>
+            </div>
+          </section>
+
+          <details class="card" open>
+            <summary><span><strong>Сон</strong><small>Ночной и дневной отдельно, без арифметического тумана</small></span></summary>
+            <div class="details-body input-grid">
+              <label>Ночной сон, часов<input type="number" name="nightSleepHours" min="0" max="24" step="0.25" placeholder="7.5"></label>
+              <label>Дневной сон, часов<input type="number" name="daySleepHours" min="0" max="12" step="0.25" placeholder="0.5"></label>
+              <label>Заснул примерно<input type="time" name="sleepStart"></label>
+              <label>Окончательно проснулся<input type="time" name="wakeTime"></label>
+            </div>
+          </details>
+
+          <details class="card">
+            <summary><span><strong>Контекст дня</strong><small>Что могло повлиять на показатели</small></span></summary>
+            <div class="details-body check-grid" data-flag-group="context">
+              <label><input type="checkbox" value="caffeine"> Кофеин</label>
+              <label><input type="checkbox" value="stress"> Выраженный стресс</label>
+              <label><input type="checkbox" value="conflict"> Конфликт</label>
+              <label><input type="checkbox" value="illnessPain"> Болезнь или боль</label>
+              <label><input type="checkbox" value="physicalActivity"> Физическая активность</label>
+              <label><input type="checkbox" value="positiveProductiveDay"> Необычно приятный или продуктивный день</label>
+            </div>
+          </details>
+
+          <details class="card">
+            <summary><span><strong>Телесные и побочные симптомы</strong><small>Отмечай только то, что действительно заметил</small></span></summary>
+            <div class="details-body check-grid" data-flag-group="symptoms">
+              <label><input type="checkbox" value="dizziness"> Головокружение</label>
+              <label><input type="checkbox" value="headache"> Головная боль</label>
+              <label><input type="checkbox" value="nausea"> Тошнота или дискомфорт в животе</label>
+              <label><input type="checkbox" value="sweating"> Потливость</label>
+              <label><input type="checkbox" value="palpitations"> Сердцебиение</label>
+              <label><input type="checkbox" value="brainZaps"> Brain zaps / разряды</label>
+              <label><input type="checkbox" value="unusualDreams"> Необычные сны</label>
+              <label><input type="checkbox" value="crying"> Плаксивость</label>
+            </div>
+          </details>
+
+          <details class="card activation-card">
+            <summary><span><strong>Необычная активация</strong><small>Контекст для врача, не самодиагностика</small></span></summary>
+            <div class="details-body check-grid" data-flag-group="activation">
+              <label><input type="checkbox" value="reducedSleepNeed"> Меньше потребности во сне</label>
+              <label><input type="checkbox" value="racingThoughts"> Ускорение мыслей</label>
+              <label><input type="checkbox" value="talkativeness"> Необычная разговорчивость</label>
+              <label><input type="checkbox" value="innerMotor"> «Внутренний мотор»</label>
+              <label><input type="checkbox" value="impulsivity"> Непривычная импульсивность</label>
+              <label><input type="checkbox" value="elevatedAgitated"> Необычно приподнятое или возбуждённое состояние</label>
+            </div>
+          </details>
+
+          <section class="card text-fields">
+            <label>Заметка<textarea name="notes" rows="4" placeholder="Что происходило, что могло повлиять, что хочется запомнить"></textarea></label>
+            <label class="red-field">Красные флажки<textarea name="redFlags" rows="2" placeholder="Например: резкое необычное изменение состояния, важное для обсуждения с врачом"></textarea></label>
+          </section>
+
+          <div class="sticky-actions">
+            <span id="save-status" class="muted">Изменения ещё не сохранены</span>
+            <div class="button-row">
+              <button type="button" class="ghost" id="hide-window">Закрыть</button>
+              <button type="submit" class="primary" id="save-checkin">Сохранить и закрыть</button>
+            </div>
+          </div>
+        </form>
+      </section>
+
+      <section id="view-history" class="view">
+        <div class="view-heading"><div><p class="eyebrow">записи</p><h2>История чек-инов</h2><p class="muted">Любую запись можно открыть, исправить или удалить.</p></div><button type="button" class="secondary" id="refresh-history">Обновить</button></div>
+        <div id="history-list" class="history-list"></div>
+      </section>
+
+      <section id="view-analytics" class="view">
+        <div class="view-heading"><div><p class="eyebrow">описательная аналитика</p><h2>Что меняется со временем</h2><p class="muted">Графики показывают рисунок данных, но не доказывают причину изменений.</p></div><button type="button" class="secondary" id="refresh-analytics">Пересчитать</button></div>
+        <div id="analytics-kpis" class="kpi-grid"></div>
+        <section class="card chart-card"><div class="section-heading"><div><h3>Основные показатели</h3><p>Ежедневные средние и трёхдневное сглаживание.</p></div></div><div id="trend-chart" class="chart"></div></section>
+        <div class="two-column">
+          <section class="card"><h3>Днём и вечером</h3><div id="paired-comparison"></div></section>
+          <section class="card"><h3>Частые отметки</h3><div id="frequency-chart"></div></section>
+        </div>
+        <section class="card"><h3>Первые семь дней и последующий период</h3><div id="period-comparison"></div></section>
+      </section>
+
+      <section id="view-settings" class="view">
+        <div class="view-heading"><div><p class="eyebrow">расписание и данные</p><h2>Настройки</h2><p class="muted">Изменения применяются сразу и сохраняются локально.</p></div></div>
+        <form id="settings-form" class="card settings-form">
+          <div class="input-grid">
+            <label>Дневное напоминание<input type="time" name="dayTime" required></label>
+            <label>Вечернее напоминание<input type="time" name="eveningTime" required></label>
+            <label>Догонять в течение, часов<input type="number" name="catchupHours" min="1" max="12" step="1"></label>
+            <label>Повторять через, минут<input type="number" name="repeatMinutes" min="15" max="240" step="5"></label>
+            <label>Дата изменения лечения<input type="date" name="treatmentChangeDate"></label>
+            <label>Подпись лечения<input type="text" name="medicationLabel" maxlength="300"></label>
+          </div>
+          <div class="button-row"><button type="submit" class="primary">Сохранить настройки</button><button type="button" class="secondary" id="pause-two-hours">Пауза на 2 часа</button><button type="button" class="ghost" id="resume-reminders">Возобновить</button></div>
+        </form>
+        <section class="card">
+          <h3>Экспорт и резервные копии</h3>
+          <p class="muted">CSV удобно анализировать, JSON сохраняет полную структуру. Автоматические копии базы хранятся 30 дней.</p>
+          <div class="button-row"><button type="button" class="secondary" id="export-csv">Экспорт CSV</button><button type="button" class="secondary" id="export-json">Экспорт JSON</button></div>
+        </section>
+        <section class="card privacy-card"><h3>Приватность</h3><p>Данные остаются на этом компьютере. Приложение не создаёт аккаунт, не отправляет телеметрию и не обращается в интернет.</p></section>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </div>
+    <script src="./vendor/chart-lite.js"></script>
+  <script src="./startup-runtime.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

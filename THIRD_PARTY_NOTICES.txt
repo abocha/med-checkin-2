@@ -1,0 +1,16 @@
+THIRD-PARTY SOFTWARE
+====================
+
+The installer downloads and installs this pinned runtime locally:
+
+1. Node.js 22.23.1
+   Copyright Node.js contributors.
+   License: MIT and bundled third-party notices.
+   Project: https://nodejs.org/
+
+The notification-area host runs as a local script under Windows PowerShell 5.1 and
+uses the Windows Forms assemblies already included with Windows. Microsoft Edge is
+used only when present on the computer and is not downloaded or redistributed by
+this package.
+
+Med Check-in does not contact external services after setup.

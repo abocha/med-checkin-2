@@ -1,0 +1,10 @@
+{
+  "name": "med-checkin-2",
+  "version": "2.1.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test --test-concurrency=1",
+    "package:windows": "node scripts/package-windows.mjs"
+  }
+}

@@ -1,0 +1,171 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const root = new URL('..', import.meta.url).pathname;
+
+for (const relative of [
+  'windows/install.ps1',
+  'windows/install.bat',
+  'windows/uninstall.ps1',
+  'windows/uninstall.bat',
+  'windows/launch-hidden.vbs',
+  'scripts/package-windows.mjs',
+  'windows/tray-host.ps1',
+  'README.txt',
+  'INSTALL.bat'
+]) {
+  test(`release contains ${relative}`, () => {
+    assert.equal(existsSync(join(root, relative)), true);
+  });
+}
+
+test('installer pins official Node, installs the PowerShell tray host, and creates both scheduled tasks', () => {
+  const script = readFileSync(join(root, 'windows/install.ps1'), 'utf8');
+  assert.match(script, /node-v22\.23\.1-win-x64\.zip/);
+  assert.doesNotMatch(script, /Neutralino/i);
+  assert.doesNotMatch(script, /csc\.exe/i);
+  assert.doesNotMatch(script, /TrayHost\.cs/);
+  assert.doesNotMatch(script, /target:winexe/i);
+  assert.match(script, /tray-host\.ps1/);
+  assert.doesNotMatch(script, /MedCheckinTray\.exe/);
+  assert.match(script, /Med Check-in 2\.0/);
+  assert.match(script, /Med Check-in 2\.0 Watchdog/);
+  assert.match(script, /RestartCount/);
+  assert.match(script, /StartWhenAvailable/);
+});
+
+test('launcher invokes bundled node runtime without a visible console', () => {
+  const launcher = readFileSync(join(root, 'windows/launch-hidden.vbs'), 'utf8');
+  assert.match(launcher, /runtime\\node\\node\.exe/i);
+  assert.match(launcher, /backend\\main\.mjs/i);
+  assert.match(launcher, /shell\.Run.+,\s*0\s*,/i);
+});
+
+test('package script excludes private runtime data and includes application resources', () => {
+  const script = readFileSync(join(root, 'scripts/package-windows.mjs'), 'utf8');
+  assert.match(script, /backend/);
+  assert.match(script, /resources/);
+  assert.match(script, /windows/);
+  assert.doesNotMatch(script, /native/);
+  assert.doesNotMatch(script, /neutralino\.config/i);
+  assert.doesNotMatch(script, /\.dev-data['"]/);
+});
+
+test('installer stages and validates runtimes before replacing a working installation', () => {
+  const script = readFileSync(join(root, 'windows/install.ps1'), 'utf8');
+  const prepare = script.lastIndexOf('Prepare-Application');
+  const stop = script.lastIndexOf('Stop-OldInstance');
+  assert.ok(prepare > -1 && stop > -1 && prepare < stop);
+  assert.match(script, /7df0bc9375723f4a86b3aa1b7cc73342423d9677a8df4538aca31a049e309c29/);
+  assert.match(script, /tray-host\.ps1/);
+});
+
+test('installer and uninstaller identify the owned PowerShell host by its command line before terminating it', () => {
+  for (const name of ['install.ps1', 'uninstall.ps1']) {
+    const script = readFileSync(join(root, 'windows', name), 'utf8');
+    assert.match(script, /ExecutablePath/);
+    assert.match(script, /CommandLine/);
+    assert.match(script, /tray-host\.ps1/);
+  }
+});
+
+test('scheduled tasks launch through the hidden VBScript wrapper', () => {
+  const script = readFileSync(join(root, 'windows/install.ps1'), 'utf8');
+  assert.match(script, /System32\\wscript\.exe/i);
+  assert.match(script, /launch-hidden\.vbs/i);
+  assert.match(script, /--logon/);
+  assert.match(script, /--watchdog/);
+  assert.doesNotMatch(script, /New-ScheduledTaskAction -Execute \$nodeExe/);
+});
+
+
+test('Windows bootstrap scripts are ASCII-safe for Windows PowerShell 5.1 and cmd.exe', () => {
+  for (const relative of [
+    'INSTALL.bat',
+    'windows/install.bat',
+    'windows/uninstall.bat',
+    'windows/install.ps1',
+    'windows/uninstall.ps1',
+    'windows/launch-hidden.vbs'
+  ]) {
+    const bytes = readFileSync(join(root, relative));
+    const firstNonAscii = bytes.findIndex((byte) => byte > 0x7f);
+    assert.equal(
+      firstNonAscii,
+      -1,
+      `${relative} contains a non-ASCII byte at offset ${firstNonAscii}; Windows PowerShell 5.1 may decode UTF-8 without BOM as ANSI`
+    );
+    const text = bytes.toString('ascii');
+    assert.equal(
+      /(^|[^\r])\n/.test(text),
+      false,
+      `${relative} contains LF-only line endings; Windows bootstrap scripts must use CRLF`
+    );
+  }
+});
+
+
+test('installer stops orphaned app processes even when runtime.json is stale', () => {
+  const script = readFileSync(join(root, 'windows/install.ps1'), 'utf8');
+  assert.match(script, /Get-CimInstance -ClassName Win32_Process/);
+  assert.match(script, /powershell\.exe/);
+  assert.match(script, /tray-host\.ps1/);
+  assert.match(script, /runtime\\node/i);
+});
+
+
+test('shortcuts invoke the hidden launcher rather than a UI executable', () => {
+  const script = readFileSync(join(root, 'windows/install.ps1'), 'utf8');
+  assert.match(script, /TargetPath = Join-Path \$env:WINDIR 'System32\\wscript\.exe'/);
+  assert.match(script, /launch-hidden\.vbs/);
+  assert.match(script, /--show/);
+  assert.match(script, /resources\\icons\\app\.ico/);
+  assert.match(script, /IconLocation = \$iconPath/);
+  assert.doesNotMatch(script, /MedCheckinTray\.exe/);
+});
+
+test('installer prepares and validates the PowerShell host before stopping the old version', () => {
+  const script = readFileSync(join(root, 'windows/install.ps1'), 'utf8');
+  const prepare = script.lastIndexOf('Prepare-Application');
+  const stop = script.lastIndexOf('Stop-OldInstance');
+  assert.ok(prepare > -1 && stop > -1 && prepare < stop);
+  assert.match(script, /PreparedTrayScript/);
+  assert.match(script, /tray-host\.ps1/);
+  assert.doesNotMatch(script, /PreviousInstallDir/);
+});
+
+test('installer performs a clean replacement, preserves data, and writes diagnostics instead of restoring 2.0.2', () => {
+  const script = readFileSync(join(root, 'windows/install.ps1'), 'utf8');
+  assert.match(script, /Remove-Item \$InstallDir -Recurse -Force/);
+  assert.match(script, /Write-InstallDiagnostics/);
+  assert.match(script, /install-diagnostics\.txt/);
+  assert.doesNotMatch(script, /Restore-PreviousInstallation/);
+  assert.doesNotMatch(script, /PreviousInstallDir/);
+  assert.doesNotMatch(script, /Remove-Item \$DataDir -Recurse/);
+});
+
+test('release metadata and verifier target Med Check-in 2.1.1', () => {
+  const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  const packageScript = readFileSync(join(root, 'scripts/package-windows.mjs'), 'utf8');
+  assert.equal(packageJson.version, '2.1.1');
+  assert.match(packageJson.scripts['package:windows'], /package-windows\.mjs/);
+  assert.match(packageScript, /med-checkin-2\.1\.1-windows-installer\.zip/);
+  assert.match(packageScript, /VERSION\.txt/);
+  assert.match(packageScript, /2\.1\.1/);
+  assert.match(packageScript, /verify-release\.mjs/);
+  assert.equal(existsSync(join(root, 'scripts/verify-release.mjs')), true);
+});
+
+test('release source no longer contains Neutralino configuration', () => {
+  assert.equal(existsSync(join(root, 'neutralino.config.json')), false);
+  const notices = readFileSync(join(root, 'THIRD_PARTY_NOTICES.txt'), 'utf8');
+  assert.doesNotMatch(notices, /Neutralino/i);
+});
+
+
+test('release source contains no compiled tray-host artifacts', () => {
+  assert.equal(existsSync(join(root, 'native')), false);
+  assert.equal(existsSync(join(root, 'MedCheckinTray.exe')), false);
+});

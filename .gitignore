@@ -1,0 +1,6 @@
+dist/
+.dev-data/
+node_modules/
+*.log
+
+.worktrees/
