@@ -73,10 +73,8 @@ function normalizeTimestamp(value, field, { nullable = false } = {}) {
 export function normalizeCheckin(input = {}, now = new Date()) {
   if (!isLocalDate(input.localDate)) throw new TypeError('Invalid localDate');
 
-  // Transitional support keeps existing 2.1 HTTP callers green until Task 2 changes the API.
-  const legacyPeriod = input.slot === '13:00' ? 'day' : input.slot === '22:00' ? 'evening' : null;
-  const kind = input.kind ?? (legacyPeriod ? 'scheduled' : null);
-  const period = input.period ?? legacyPeriod;
+  const kind = input.kind;
+  const period = input.period;
   if (!['scheduled', 'extra'].includes(kind)) throw new TypeError('Invalid kind');
   if (kind === 'scheduled' && !['day', 'evening'].includes(period)) throw new TypeError('Invalid period');
   if (kind === 'extra' && period !== null) throw new TypeError('Extra period must be null');
@@ -86,7 +84,7 @@ export function normalizeCheckin(input = {}, now = new Date()) {
     localDate: input.localDate,
     period,
     scheduledFor: normalizeTimestamp(input.scheduledFor, 'scheduledFor', { nullable: true }),
-    observedAt: normalizeTimestamp(input.observedAt ?? (legacyPeriod ? (input.recordedAt ?? now.toISOString()) : null), 'observedAt'),
+    observedAt: normalizeTimestamp(input.observedAt, 'observedAt'),
     nightSleepHours: optionalHours(input.nightSleepHours),
     daySleepHours: optionalHours(input.daySleepHours),
     sleepStart: /^\d{2}:\d{2}$/.test(input.sleepStart ?? '') ? input.sleepStart : null,

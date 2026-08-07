@@ -21,6 +21,7 @@ test('skips semantic completion, dismissal, snooze, and recent notification stat
 
 test('returns Evening after its configured time and expires after catch-up', () => {
   assert.equal(getDueReminder(local(22, 15), DEFAULT_SETTINGS, new Set(), {}).period, 'evening');
+  assert.equal(getDueReminder(new Date(2026, 7, 1, 0, 30), DEFAULT_SETTINGS, new Set(), {}).localDate, '2026-07-31');
   assert.equal(getDueReminder(new Date(2026, 7, 1, 3, 0), DEFAULT_SETTINGS, new Set(), {}), null);
 });
 

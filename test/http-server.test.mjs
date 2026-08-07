@@ -80,6 +80,19 @@ test('API rejects duplicate scheduled identity, accepts partial Extras, and reje
     assert.equal((await response.json()).anxiety, null);
     response = await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify({ ...extra, mood: null }) });
     assert.equal(response.status, 400);
+    response = await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify({ ...body, kind: undefined, period: undefined, observedAt: undefined, slot: '13:00' }) });
+    assert.equal(response.status, 400);
+  } finally { await f.close(); }
+});
+
+test('API reports a scheduled identity collision during edit as 409 with the existing entry', async () => {
+  const f = await fixture();
+  try {
+    const day = await (await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify(body) })).json();
+    await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify({ ...body, period: 'evening' }) });
+    const response = await api(f.base, `/api/v1/checkins/${day.id}`, { method: 'PUT', body: JSON.stringify({ ...body, period: 'evening' }) });
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).existing.period, 'evening');
   } finally { await f.close(); }
 });
 
@@ -212,6 +225,15 @@ test('host poll drains open and close commands and reports a due reminder', asyn
   } finally {
     await app.close(); repo.close(); rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('host poll recognizes a completed previous Evening during cross-midnight catch-up', async () => {
+  const f = await fixture({ now: () => new Date(2026, 7, 1, 0, 30) });
+  try {
+    f.repo.createCheckin({ ...body, localDate: '2026-07-31', period: 'evening' }, new Date('2026-07-31T15:05:00.000Z'));
+    const response = await api(f.base, '/api/v1/host/poll');
+    assert.equal((await response.json()).due, null);
+  } finally { await f.close(); }
 });
 
 test('host control accepts restart and quit commands', async () => {

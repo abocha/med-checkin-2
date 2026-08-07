@@ -226,8 +226,16 @@ export function createHttpServer({ repo, token, dataDir, resourcesDir = null, ho
     }
     if (checkinId && req.method === 'PUT') {
       const body = await readBody(req);
+      const current = repo.getCheckinById(checkinId[1]);
+      if (!current) return json(res, 404, { error: 'not_found' });
+      const targetKind = body.kind ?? current.kind;
+      const targetDate = body.localDate ?? current.localDate;
+      const targetPeriod = body.period ?? current.period;
+      if (targetKind === 'scheduled') {
+        const existing = repo.getScheduledCheckin(targetDate, targetPeriod);
+        if (existing && existing.id !== current.id) return json(res, 409, { error: 'scheduled_exists', existing });
+      }
       const saved = repo.updateCheckin(checkinId[1], body, now());
-      if (!saved) return json(res, 404, { error: 'not_found' });
       if (saved.kind === 'scheduled') repo.clearReminderState(saved.localDate, saved.period);
       await onPersisted();
       eventHub.broadcast('checkin-saved', saved);
@@ -280,16 +288,22 @@ export function createHttpServer({ repo, token, dataDir, resourcesDir = null, ho
     if (url.pathname === '/api/v1/reminders/due' && req.method === 'GET') {
       const currentTime = now();
       const date = localDateString(currentTime);
-      const completed = new Set(repo.listCheckins({ from: date, to: date, kind: 'scheduled', limit: 10 }).map((row) => `${row.localDate}|${row.period}`));
-      const due = getDueReminder(currentTime, repo.getSettings(), completed, repo.getReminderStates(date));
+      const previous = new Date(currentTime); previous.setDate(previous.getDate() - 1);
+      const previousDate = localDateString(previous);
+      const completed = new Set(repo.listCheckins({ from: previousDate, to: date, kind: 'scheduled', limit: 10 }).map((row) => `${row.localDate}|${row.period}`));
+      const states = { [previousDate]: repo.getReminderStates(previousDate), [date]: repo.getReminderStates(date) };
+      const due = getDueReminder(currentTime, repo.getSettings(), completed, states);
       return json(res, 200, { due });
     }
 
     if (url.pathname === '/api/v1/host/poll' && req.method === 'GET') {
       const currentTime = now();
       const date = localDateString(currentTime);
-      const completed = new Set(repo.listCheckins({ from: date, to: date, kind: 'scheduled', limit: 10 }).map((row) => `${row.localDate}|${row.period}`));
-      const due = getDueReminder(currentTime, repo.getSettings(), completed, repo.getReminderStates(date));
+      const previous = new Date(currentTime); previous.setDate(previous.getDate() - 1);
+      const previousDate = localDateString(previous);
+      const completed = new Set(repo.listCheckins({ from: previousDate, to: date, kind: 'scheduled', limit: 10 }).map((row) => `${row.localDate}|${row.period}`));
+      const states = { [previousDate]: repo.getReminderStates(previousDate), [date]: repo.getReminderStates(date) };
+      const due = getDueReminder(currentTime, repo.getSettings(), completed, states);
       return json(res, 200, { actions: hostActions?.drain() ?? [], due });
     }
 

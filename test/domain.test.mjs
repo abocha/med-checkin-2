@@ -41,6 +41,7 @@ test('normalizeCheckin validates observation identity and timestamp', () => {
   assert.throws(() => normalizeCheckin({ kind: 'scheduled', period: null, localDate: '2026-07-31', observedAt: '2026-07-31T06:00:00.000Z', ...scales }), /period/i);
   assert.throws(() => normalizeCheckin({ kind: 'extra', period: 'day', localDate: '2026-07-31', observedAt: '2026-07-31T06:00:00.000Z', mood: 3 }), /period/i);
   assert.throws(() => normalizeCheckin({ kind: 'extra', period: null, localDate: '2026-07-31', observedAt: 'not-a-time', mood: 3 }), /observedAt/i);
+  assert.throws(() => normalizeCheckin({ localDate: '2026-07-31', slot: '13:00', ...scales }), /kind/i);
 });
 
 test('slotForTime chooses the nearest active scheduled window', () => {
