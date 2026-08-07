@@ -42,6 +42,10 @@ test('prepareDatabase migrates a synthetic 2.1.1 database without inventing hist
       assert.equal(evening.period, 'evening');
       assert.equal(evening.updatedAt, '2026-07-31T15:24:00.000Z');
       assert.equal(evening.redFlags, 'fixture red flag');
+      const editedDay = repo.updateCheckin(day.id, { ...day, mood: 8 }, new Date('2026-08-07T02:00:00.000Z'));
+      assert.equal(editedDay.observedAt, null);
+      assert.equal(editedDay.recordedAt, '2026-07-31T06:05:00.000Z');
+      assert.equal(editedDay.updatedAt, '2026-08-07T02:00:00.000Z');
       assert.equal(repo.getSettings().dayTime, '12:30');
       assert.equal(repo.getSettings().treatmentChangeDate, undefined);
       assert.equal(repo.getReminderStates('2026-07-31').day.snoozedUntil, '2026-07-31T07:00:00.000Z');

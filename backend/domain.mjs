@@ -70,7 +70,7 @@ function normalizeTimestamp(value, field, { nullable = false } = {}) {
   return value;
 }
 
-export function normalizeCheckin(input = {}, now = new Date()) {
+export function normalizeCheckin(input = {}, { allowMissingObservedAt = false } = {}) {
   if (!isLocalDate(input.localDate)) throw new TypeError('Invalid localDate');
 
   const kind = input.kind;
@@ -84,7 +84,7 @@ export function normalizeCheckin(input = {}, now = new Date()) {
     localDate: input.localDate,
     period,
     scheduledFor: normalizeTimestamp(input.scheduledFor, 'scheduledFor', { nullable: true }),
-    observedAt: normalizeTimestamp(input.observedAt, 'observedAt'),
+    observedAt: normalizeTimestamp(input.observedAt, 'observedAt', { nullable: allowMissingObservedAt }),
     nightSleepHours: optionalHours(input.nightSleepHours),
     daySleepHours: optionalHours(input.daySleepHours),
     sleepStart: /^\d{2}:\d{2}$/.test(input.sleepStart ?? '') ? input.sleepStart : null,

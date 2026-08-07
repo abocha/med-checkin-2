@@ -116,7 +116,7 @@ function makeExtraDraftKey() {
   return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function resetForm({ kind = 'scheduled', period = 'day', date = localDate(), scheduledFor = null, observedAt = new Date().toISOString() } = {}) {
+function resetForm({ kind = 'scheduled', period = 'day', date = localDate(), scheduledFor = null, observedAt = undefined } = {}) {
   const form = $('#checkin-form');
   state.suppressDirty = true;
   form.reset();
@@ -128,8 +128,9 @@ function resetForm({ kind = 'scheduled', period = 'day', date = localDate(), sch
   form.elements.period.value = state.currentPeriod || '';
   form.elements.localDate.value = date;
   form.elements.scheduledFor.value = scheduledFor || '';
-  form.elements.observedAt.value = observedAt || new Date().toISOString();
-  form.elements.observedAtLocal.value = localDateTimeValue(form.elements.observedAt.value);
+  const effectiveObservedAt = observedAt === undefined ? new Date().toISOString() : observedAt;
+  form.elements.observedAt.value = effectiveObservedAt ?? '';
+  form.elements.observedAtLocal.value = effectiveObservedAt ? localDateTimeValue(effectiveObservedAt) : '';
   scaleFields.forEach(name => setScale(form.elements[name], null));
   setFlags('context'); setFlags('symptoms'); setFlags('activation');
   state.currentRecord = null;
@@ -150,7 +151,7 @@ function fillForm(record) {
     period: record.period,
     date: record.localDate,
     scheduledFor: record.scheduledFor,
-    observedAt: record.observedAt || new Date().toISOString()
+    observedAt: record.observedAt
   });
   const form = $('#checkin-form');
   state.suppressDirty = true;
@@ -252,7 +253,9 @@ function formPayload() {
   payload.kind = state.currentKind;
   payload.period = state.currentKind === 'scheduled' ? state.currentPeriod : null;
   payload.scheduledFor = state.currentKind === 'scheduled' ? (payload.scheduledFor || null) : null;
-  payload.observedAt = isoFromLocalDateTime(payload.observedAtLocal) || payload.observedAt || new Date().toISOString();
+  const explicitObservedAt = isoFromLocalDateTime(payload.observedAtLocal);
+  payload.observedAt = explicitObservedAt
+    ?? (state.currentRecord?.observedAt === null ? null : (payload.observedAt || new Date().toISOString()));
   payload.localDate = state.currentKind === 'extra' ? localDate(new Date(payload.observedAt)) : state.currentDate;
   for (const name of scaleFields) payload[name] = form.elements[name].dataset.chosen === 'true' ? Number(form.elements[name].value) : null;
   payload.nightSleepHours = payload.nightSleepHours === '' ? null : Number(payload.nightSleepHours);

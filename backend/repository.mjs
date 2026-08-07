@@ -123,7 +123,10 @@ export function createRepository(dbPath) {
     updateCheckin(id, input, now = new Date()) {
       const current = this.getCheckinById(id);
       if (!current) return null;
-      const checkin = normalizeCheckin({ ...current, ...input });
+      const merged = { ...current, ...input };
+      const checkin = normalizeCheckin(merged, {
+        allowMissingObservedAt: current.observedAt === null && merged.observedAt === null
+      });
       const values = observationValues(checkin, current.recordedAt, now.toISOString());
       values.splice(5, 1);
       return rowToCheckin(update.get(...values, Number(id)));
