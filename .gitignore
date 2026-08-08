@@ -2,6 +2,7 @@ dist/
 .dev-data/
 node_modules/
 *.log
-.codex/
+.codex/*
+!.codex/PROJECT.md
 
 .worktrees/
