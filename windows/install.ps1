@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$AppName = 'Med Check-in 2.2.1'
+$AppName = 'Med Check-in 2.2.2'
 $MainTaskName = 'Med Check-in 2.0'
 $WatchdogTaskName = 'Med Check-in 2.0 Watchdog'
 $NodeVersion = '22.23.1'
@@ -203,7 +203,7 @@ function Write-InstallDiagnostics([string]$Reason) {
   try {
     New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
     $lines = New-Object 'System.Collections.Generic.List[string]'
-    $lines.Add('Med Check-in 2.2.1 installation diagnostics')
+    $lines.Add('Med Check-in 2.2.2 installation diagnostics')
     $lines.Add('Generated: ' + [datetime]::UtcNow.ToString('o'))
     $lines.Add('Reason: ' + $Reason)
     $lines.Add('')
