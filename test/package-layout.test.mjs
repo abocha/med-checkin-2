@@ -87,6 +87,55 @@ test('installer stages and validates runtimes before replacing a working install
   assert.match(script, /tray-host\.ps1/);
 });
 
+test('installer Edge cleanup is allowlisted and preserves draft/data paths', () => {
+  const script = readFileSync(join(root, 'windows/install.ps1'), 'utf8');
+  for (const relative of [
+    'component_crx_cache',
+    'ProvenanceData',
+    'ProvenanceDataTensors',
+    'BrowserMetrics',
+    'GrShaderCache',
+    'ShaderCache',
+    'GPUPersistentCache',
+    'Default\\Cache',
+    'Default\\Code Cache',
+    'Default\\GPUCache',
+    'Default\\DawnWebGPUCache',
+    'Default\\DawnGraphiteCache'
+  ]) {
+    assert.match(script, new RegExp(relative.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  for (const protectedPath of [
+    'Default\\Local Storage',
+    'Default\\Storage',
+    'Default\\WebStorage',
+    'Default\\Session Storage',
+    'med-check-in.sqlite',
+    'backups'
+  ]) {
+    assert.doesNotMatch(script, new RegExp(`EdgeCleanupRelativePaths[\\s\\S]*${protectedPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  }
+});
+
+test('installer constrains Edge cleanup beneath its dedicated profile and treats deletion failures as non-fatal', () => {
+  const script = readFileSync(join(root, 'windows/install.ps1'), 'utf8');
+  assert.match(script, /function Test-EdgeCleanupTarget/);
+  assert.match(script, /\[IO\.Path\]::GetFullPath/);
+  assert.match(script, /StringComparison\]::OrdinalIgnoreCase/);
+  assert.match(script, /function Clear-DisposableEdgeProfile/);
+  assert.match(script, /foreach \(\$relativePath in \$EdgeCleanupRelativePaths\)/);
+  assert.match(script, /Remove-Item.+-Recurse.+-Force.+-ErrorAction Stop/);
+  assert.match(script, /catch \{/);
+});
+
+test('installer cleans Edge profile only after stopping the old instance and before installing the prepared app', () => {
+  const script = readFileSync(join(root, 'windows/install.ps1'), 'utf8');
+  const stop = script.lastIndexOf('Stop-OldInstance');
+  const clean = script.lastIndexOf('Clear-DisposableEdgeProfile');
+  const install = script.lastIndexOf('Install-PreparedApplication');
+  assert.ok(stop > -1 && clean > stop && install > clean);
+});
+
 test('installer and uninstaller identify the owned PowerShell host by its command line before terminating it', () => {
   for (const name of ['install.ps1', 'uninstall.ps1']) {
     const script = readFileSync(join(root, 'windows', name), 'utf8');

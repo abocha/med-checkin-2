@@ -13,6 +13,21 @@ $NodeSha256 = '7df0bc9375723f4a86b3aa1b7cc73342423d9677a8df4538aca31a049e309c29'
 $SourceDir = Split-Path -Parent $PSScriptRoot
 $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\MedCheckin2'
 $DataDir = Join-Path $env:LOCALAPPDATA 'MedCheckin2'
+$EdgeProfileDir = Join-Path $DataDir 'edge-profile'
+$EdgeCleanupRelativePaths = @(
+  'component_crx_cache',
+  'ProvenanceData',
+  'ProvenanceDataTensors',
+  'BrowserMetrics',
+  'GrShaderCache',
+  'ShaderCache',
+  'GPUPersistentCache',
+  'Default\Cache',
+  'Default\Code Cache',
+  'Default\GPUCache',
+  'Default\DawnWebGPUCache',
+  'Default\DawnGraphiteCache'
+)
 $TempDir = Join-Path $env:TEMP ('MedCheckin2-install-' + [guid]::NewGuid().ToString('N'))
 $PreparedAppDir = Join-Path $TempDir 'prepared\app'
 $PreparedTrayScript = Join-Path $PreparedAppDir 'windows\tray-host.ps1'
@@ -106,10 +121,38 @@ function Stop-AppProcess([object]$ProcessId) {
 }
 
 function Stop-DedicatedEdge {
-  $profilePath = Join-Path $DataDir 'edge-profile'
   Get-CimInstance -ClassName Win32_Process -Filter "Name = 'msedge.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($profilePath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } |
+    Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($EdgeProfileDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } |
     ForEach-Object { Stop-Process -Id ([int]$_.ProcessId) -Force -ErrorAction SilentlyContinue }
+}
+
+function Test-EdgeCleanupTarget([string]$Path) {
+  try {
+    $root = [IO.Path]::GetFullPath($EdgeProfileDir).TrimEnd('\')
+    $candidate = [IO.Path]::GetFullPath($Path)
+    return $candidate.StartsWith($root + '\', [System.StringComparison]::OrdinalIgnoreCase)
+  } catch {
+    return $false
+  }
+}
+
+function Clear-DisposableEdgeProfile {
+  if (-not (Test-Path -LiteralPath $EdgeProfileDir)) { return }
+
+  foreach ($relativePath in $EdgeCleanupRelativePaths) {
+    $target = Join-Path $EdgeProfileDir $relativePath
+    try {
+      if (-not (Test-EdgeCleanupTarget $target)) {
+        Write-Warning ('Skipping Edge cleanup target outside the dedicated profile: ' + $relativePath)
+        continue
+      }
+      if (Test-Path -LiteralPath $target) {
+        Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop
+      }
+    } catch {
+      Write-Warning ('Could not clean Edge profile path ' + $relativePath + ': ' + $_.Exception.Message)
+    }
+  }
 }
 
 function Stop-OldInstance {
@@ -349,6 +392,8 @@ try {
   Prepare-Application
   Write-Step 'Removing the previous application version'
   Stop-OldInstance
+  Write-Step 'Cleaning disposable Edge profile data'
+  Clear-DisposableEdgeProfile
   Write-Step 'Installing the prepared application'
   Install-PreparedApplication
   Write-Step 'Configuring startup and automatic recovery'
