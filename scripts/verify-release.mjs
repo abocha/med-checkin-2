@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '2.2.0';
+const VERSION = '2.2.1';
 const ROOT_DIR = 'MedCheckin2';
 const REQUIRED_ENTRIES = [
   'INSTALL.bat',

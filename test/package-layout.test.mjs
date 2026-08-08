@@ -147,22 +147,29 @@ test('installer performs a clean replacement, preserves data, and writes diagnos
   assert.doesNotMatch(script, /Remove-Item \$DataDir -Recurse/);
 });
 
-test('release metadata and verifier target Med Check-in 2.2.0', () => {
+test('installer health check avoids culture-dependent runtime timestamp string round-trips', () => {
+  const script = readFileSync(join(root, 'windows/install.ps1'), 'utf8');
+  assert.doesNotMatch(script, /\[datetime\]::Parse\(\[string\]\$runtime\.(?:startedAt|hostHeartbeatAt)\)/);
+  assert.match(script, /\(\[datetime\]\$runtime\.startedAt\)\.ToUniversalTime\(\)/);
+  assert.match(script, /\(\[datetime\]\$runtime\.hostHeartbeatAt\)\.ToUniversalTime\(\)/);
+});
+
+test('release metadata and verifier target Med Check-in 2.2.1', () => {
   const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
   const packageLock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
   const packageScript = readFileSync(join(root, 'scripts/package-windows.mjs'), 'utf8');
   const verifierScript = readFileSync(join(root, 'scripts/verify-release.mjs'), 'utf8');
   const ui = readFileSync(join(root, 'resources/index.html'), 'utf8');
-  assert.equal(packageJson.version, '2.2.0');
-  assert.equal(packageLock.version, '2.2.0');
-  assert.equal(packageLock.packages[''].version, '2.2.0');
+  assert.equal(packageJson.version, '2.2.1');
+  assert.equal(packageLock.version, '2.2.1');
+  assert.equal(packageLock.packages[''].version, '2.2.1');
   assert.match(packageJson.scripts['package:windows'], /package-windows\.mjs/);
-  assert.match(packageScript, /med-checkin-2\.2\.0-windows-installer\.zip/);
+  assert.match(packageScript, /med-checkin-2\.2\.1-windows-installer\.zip/);
   assert.match(packageScript, /VERSION\.txt/);
-  assert.match(packageScript, /2\.2\.0/);
+  assert.match(packageScript, /2\.2\.1/);
   assert.match(packageScript, /verify-release\.mjs/);
-  assert.match(verifierScript, /2\.2\.0/);
-  assert.match(ui, /<title>Med Check-in 2\.2\.0<\/title>/);
+  assert.match(verifierScript, /2\.2\.1/);
+  assert.match(ui, /<title>Med Check-in 2\.2\.1<\/title>/);
   assert.match(ui, /<h1>Med Check-in <span>2\.2<\/span><\/h1>/);
   assert.equal(existsSync(join(root, 'scripts/verify-release.mjs')), true);
 });

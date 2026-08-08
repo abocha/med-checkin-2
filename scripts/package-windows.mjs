@@ -3,12 +3,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-const VERSION = '2.2.0';
+const VERSION = '2.2.1';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const dist = join(root, 'dist');
 const stage = join(dist, 'package-stage');
 const packageRoot = join(stage, 'MedCheckin2');
-const archiveName = 'med-checkin-2.2.0-windows-installer.zip';
+const archiveName = 'med-checkin-2.2.1-windows-installer.zip';
 const archive = join(dist, archiveName);
 
 rmSync(stage, { recursive: true, force: true });

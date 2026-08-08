@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$AppName = 'Med Check-in 2.2.0'
+$AppName = 'Med Check-in 2.2.1'
 $MainTaskName = 'Med Check-in 2.0'
 $WatchdogTaskName = 'Med Check-in 2.0 Watchdog'
 $NodeVersion = '22.23.1'
@@ -160,7 +160,7 @@ function Write-InstallDiagnostics([string]$Reason) {
   try {
     New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
     $lines = New-Object 'System.Collections.Generic.List[string]'
-    $lines.Add('Med Check-in 2.2.0 installation diagnostics')
+    $lines.Add('Med Check-in 2.2.1 installation diagnostics')
     $lines.Add('Generated: ' + [datetime]::UtcNow.ToString('o'))
     $lines.Add('Reason: ' + $Reason)
     $lines.Add('')
@@ -191,24 +191,93 @@ function Write-InstallDiagnostics([string]$Reason) {
 function Wait-ForApplication([datetime]$NotBefore) {
   $deadline = (Get-Date).AddSeconds(45)
   $runtimeFile = Join-Path $DataDir 'runtime.json'
+  $lastState = 'No runtime state observed.'
+  $lastError = $null
+
   while ((Get-Date) -lt $deadline) {
     try {
-      if (Test-Path $runtimeFile) {
-        $runtime = Get-Content $runtimeFile -Raw | ConvertFrom-Json
-        $startedAt = [datetime]::Parse([string]$runtime.startedAt).ToUniversalTime()
-        if ($startedAt -ge $NotBefore.AddSeconds(-2) -and $runtime.pid -and $runtime.hostPid -and $runtime.hostHeartbeatAt) {
-          $health = Invoke-RestMethod -Uri ('http://127.0.0.1:' + [int]$runtime.port + '/health') -TimeoutSec 2
-          $host = Get-CimInstance -ClassName Win32_Process -Filter ('ProcessId = ' + [int]$runtime.hostPid) -ErrorAction SilentlyContinue
-          $heartbeatAt = [datetime]::Parse([string]$runtime.hostHeartbeatAt).ToUniversalTime()
-          if ($health.ok -and [int]$health.pid -eq [int]$runtime.pid -and (Test-InstalledTrayProcess $host) -and ([datetime]::UtcNow - $heartbeatAt).TotalSeconds -lt 12) {
-            return
-          }
-        }
+      $lastError = $null
+
+      if (-not (Test-Path $runtimeFile)) {
+        $lastState = 'runtime.json not found'
+        Start-Sleep -Milliseconds 750
+        continue
       }
-    } catch {}
+
+      $runtime = Get-Content $runtimeFile -Raw | ConvertFrom-Json
+      $startedAt = ([datetime]$runtime.startedAt).ToUniversalTime()
+      $notBeforeUtc = $NotBefore.ToUniversalTime()
+
+      $startedFresh = $startedAt -ge $notBeforeUtc.AddSeconds(-2)
+      $hasPid = [bool]$runtime.pid
+      $hasHostPid = [bool]$runtime.hostPid
+      $hasHeartbeat = [bool]$runtime.hostHeartbeatAt
+
+      $healthOk = $false
+      $pidMatches = $false
+      $trayMatches = $false
+      $heartbeatAge = $null
+
+      if ($startedFresh -and $hasPid -and $hasHostPid -and $hasHeartbeat) {
+        $health = Invoke-RestMethod `
+          -Uri ('http://127.0.0.1:' + [int]$runtime.port + '/health') `
+          -TimeoutSec 2
+
+        $healthOk = [bool]$health.ok
+        $pidMatches = [int]$health.pid -eq [int]$runtime.pid
+
+        $hostProcess = Get-CimInstance `
+          -ClassName Win32_Process `
+          -Filter ('ProcessId = ' + [int]$runtime.hostPid) `
+          -ErrorAction SilentlyContinue
+
+        $trayMatches = Test-InstalledTrayProcess $hostProcess
+
+        $heartbeatAt = ([datetime]$runtime.hostHeartbeatAt).ToUniversalTime()
+        $heartbeatAge = ([datetime]::UtcNow - $heartbeatAt).TotalSeconds
+      }
+
+      $lastState = (
+        'startedAt={0:o}; notBefore={1:o}; startedFresh={2}; ' +
+        'pid={3}; hostPid={4}; hasHeartbeat={5}; ' +
+        'healthOk={6}; pidMatches={7}; trayMatches={8}; heartbeatAgeSec={9}'
+      ) -f `
+        $startedAt,
+        $notBeforeUtc,
+        $startedFresh,
+        $runtime.pid,
+        $runtime.hostPid,
+        $hasHeartbeat,
+        $healthOk,
+        $pidMatches,
+        $trayMatches,
+        $heartbeatAge
+
+      if (
+        $startedFresh -and
+        $hasPid -and
+        $hasHostPid -and
+        $hasHeartbeat -and
+        $healthOk -and
+        $pidMatches -and
+        $trayMatches -and
+        $heartbeatAge -lt 12
+      ) {
+        return
+      }
+    } catch {
+      $lastError = $_.Exception.ToString()
+    }
+
     Start-Sleep -Milliseconds 750
   }
+
   $reason = 'The new backend or PowerShell tray host did not become healthy within 45 seconds.'
+  $reason += ' Last state: ' + $lastState
+  if ($lastError) {
+    $reason += ' Last error: ' + $lastError
+  }
+
   Write-InstallDiagnostics $reason
   throw ($reason + ' Diagnostics: ' + $DiagnosticsFile)
 }
