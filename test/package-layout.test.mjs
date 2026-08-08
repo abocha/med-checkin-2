@@ -44,6 +44,30 @@ test('launcher invokes bundled node runtime without a visible console', () => {
   assert.match(launcher, /shell\.Run.+,\s*0\s*,/i);
 });
 
+test('dedicated Edge launch suppresses background networking and component provisioning', () => {
+  const script = readFileSync(join(root, 'windows/tray-host.ps1'), 'utf8');
+  for (const required of [
+    '--app=',
+    '--user-data-dir=',
+    '--no-first-run',
+    '--disable-sync',
+    '--disable-background-mode',
+    '--disable-background-networking',
+    '--disable-component-update',
+    '--no-default-browser-check'
+  ]) {
+    assert.match(script, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  for (const excluded of [
+    '--disable-default-apps',
+    '--disable-extensions',
+    '--disk-cache-size',
+    '--disable-features'
+  ]) {
+    assert.doesNotMatch(script, new RegExp(excluded.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+});
+
 test('package script excludes private runtime data and includes application resources', () => {
   const script = readFileSync(join(root, 'scripts/package-windows.mjs'), 'utf8');
   assert.match(script, /backend/);

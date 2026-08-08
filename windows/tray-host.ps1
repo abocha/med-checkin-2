@@ -124,8 +124,11 @@ function Open-App {
         ('--app=' + $url),
         ('--user-data-dir="' + $script:EdgeProfile + '"'),
         '--no-first-run',
+        '--no-default-browser-check',
         '--disable-sync',
         '--disable-background-mode',
+        '--disable-background-networking',
+        '--disable-component-update',
         '--window-size=1040,900'
       )
       Start-Process -FilePath $edge -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $edge) | Out-Null
