@@ -72,9 +72,10 @@ it after context compaction or a long interruption.
 ## Collaboration and Ownership
 
 - The primary agent owns integration, repository accountability, and the final result.
-- Delegation is opt-in. Use delegated agents only when the user, an approved plan, or an applicable
-  skill requests them and they materially improve the outcome. Do not spawn agents merely because
-  roles are available.
+- Delegation may be automatic when a matching custom role materially improves cost, context
+  isolation, parallelism, or review quality. Do not delegate trivial work merely because a role exists.
+  The primary agent remains responsible for task decomposition, integration, validation, and the
+  final result.
 - Give each delegated agent a bounded, non-overlapping question or responsibility, explicit file
   ownership for writes, and clear acceptance criteria.
 - Preserve other agents' and users' concurrent work. Do not revert or overwrite changes merely
@@ -87,11 +88,27 @@ When the matching definitions exist under `.codex/agents/`, use the smallest rol
 task. Role names, models, and sandbox settings do not grant additional authority; the user request,
 active instruction chain, and parent task remain controlling.
 
-- **`luna_implementer`:** economical workspace-writing agent for a well-specified,
-  pattern-following change or mechanical task from an approved plan. Assign explicit files or
-  responsibility, acceptance criteria, and targeted validation. It must stop before architecture,
-  security, authorization, privacy, data-integrity, concurrency, migration, public-contract, or
-  production decisions.
+### Delegation Routing Safety
+
+- Select the actual registered custom role through the runtime's agent-role selector. A task name,
+  prompt label, or natural-language role name is not sufficient evidence that the custom role was
+  selected.
+- Use a fresh child context (`fork_turns = "none"`) for heterogeneous model delegation unless the
+  runtime explicitly guarantees equivalent isolation.
+- Never silently substitute a generic/default agent or another model when the requested custom role
+  cannot be selected. In particular, never substitute Sol, Terra, or an inherited parent
+  configuration for `luna_implementer`.
+- If named-role routing fails or is unavailable, either perform the work in the primary agent or
+  report the routing failure.
+- Do not claim that a child used a configured role, model, reasoning effort, or sandbox unless the
+  runtime actually selected that role or provides corresponding execution metadata.
+
+- **`luna_implementer`:** default delegated implementation role for a well-specified,
+  pattern-following, low-risk change or a bounded implementation step from an approved plan. Prefer
+  it over doing such non-trivial work in the Sol parent when the task can be handed off with explicit
+  scope, acceptance criteria, and targeted validation. It must stop before architecture, security,
+  authorization, privacy, data-integrity, concurrency, migration, public-contract, or production
+  decisions.
 - **`terra_explorer`:** read-only agent for broad multi-file tracing of entry points, execution
   paths, ownership, contracts, tests, configuration, and active documentation. It gathers evidence
   but does not choose architecture or implementation. Do not repeat its broad exploration in the
