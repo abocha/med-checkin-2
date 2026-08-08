@@ -120,10 +120,18 @@ function Stop-AppProcess([object]$ProcessId) {
   }
 }
 
+function Get-DedicatedEdgeProcesses {
+  Get-CimInstance -ClassName Win32_Process -Filter "Name = 'msedge.exe'" -ErrorAction Stop |
+    Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($EdgeProfileDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 }
+}
+
 function Stop-DedicatedEdge {
-  Get-CimInstance -ClassName Win32_Process -Filter "Name = 'msedge.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($EdgeProfileDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } |
-    ForEach-Object { Stop-Process -Id ([int]$_.ProcessId) -Force -ErrorAction SilentlyContinue }
+  try {
+    Get-DedicatedEdgeProcesses |
+      ForEach-Object { Stop-Process -Id ([int]$_.ProcessId) -Force -ErrorAction SilentlyContinue }
+  } catch {
+    Write-Warning ('Could not stop dedicated Edge processes: ' + $_.Exception.Message)
+  }
 }
 
 function Test-EdgeCleanupTarget([string]$Path) {
@@ -138,6 +146,17 @@ function Test-EdgeCleanupTarget([string]$Path) {
 
 function Clear-DisposableEdgeProfile {
   if (-not (Test-Path -LiteralPath $EdgeProfileDir)) { return }
+
+  try {
+    $dedicatedEdgeProcesses = @(Get-DedicatedEdgeProcesses)
+  } catch {
+    Write-Warning ('Could not verify dedicated Edge processes before cleanup: ' + $_.Exception.Message)
+    return
+  }
+  if ($dedicatedEdgeProcesses.Count -gt 0) {
+    Write-Warning 'Skipping Edge cleanup because dedicated Edge processes are still running.'
+    return
+  }
 
   foreach ($relativePath in $EdgeCleanupRelativePaths) {
     $target = Join-Path $EdgeProfileDir $relativePath

@@ -6,6 +6,13 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 
+function readPowerShellFunction(script, name) {
+  const start = script.indexOf(`function ${name}`);
+  assert.notEqual(start, -1, `windows/install.ps1 is missing function ${name}`);
+  const next = script.indexOf('\nfunction ', start + 1);
+  return script.slice(start, next === -1 ? script.length : next);
+}
+
 for (const relative of [
   'windows/install.ps1',
   'windows/install.bat',
@@ -87,9 +94,14 @@ test('installer stages and validates runtimes before replacing a working install
   assert.match(script, /tray-host\.ps1/);
 });
 
-test('installer Edge cleanup is allowlisted and preserves draft/data paths', () => {
+test('installer Edge cleanup has the exact approved relative allowlist', () => {
   const script = readFileSync(join(root, 'windows/install.ps1'), 'utf8');
-  for (const relative of [
+  const array = script.match(/\$EdgeCleanupRelativePaths\s*=\s*@\(\s*([\s\S]*?)\r?\n\)/);
+  assert.ok(array, 'installer must define the Edge cleanup allowlist');
+  const actual = Array.from(array[1].matchAll(/'([^']+)'/g), (match) => match[1]);
+  const residue = array[1].replace(/'[^']*'/g, '').replace(/[\s,]/g, '');
+  assert.equal(residue, '', 'installer Edge cleanup allowlist must contain only single-quoted literal paths');
+  assert.deepEqual(actual, [
     'component_crx_cache',
     'ProvenanceData',
     'ProvenanceDataTensors',
@@ -102,30 +114,37 @@ test('installer Edge cleanup is allowlisted and preserves draft/data paths', () 
     'Default\\GPUCache',
     'Default\\DawnWebGPUCache',
     'Default\\DawnGraphiteCache'
-  ]) {
-    assert.match(script, new RegExp(relative.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  }
-  for (const protectedPath of [
-    'Default\\Local Storage',
-    'Default\\Storage',
-    'Default\\WebStorage',
-    'Default\\Session Storage',
-    'med-check-in.sqlite',
-    'backups'
-  ]) {
-    assert.doesNotMatch(script, new RegExp(`EdgeCleanupRelativePaths[\\s\\S]*${protectedPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
-  }
+  ]);
 });
 
 test('installer constrains Edge cleanup beneath its dedicated profile and treats deletion failures as non-fatal', () => {
   const script = readFileSync(join(root, 'windows/install.ps1'), 'utf8');
-  assert.match(script, /function Test-EdgeCleanupTarget/);
-  assert.match(script, /\[IO\.Path\]::GetFullPath/);
-  assert.match(script, /StringComparison\]::OrdinalIgnoreCase/);
-  assert.match(script, /function Clear-DisposableEdgeProfile/);
-  assert.match(script, /foreach \(\$relativePath in \$EdgeCleanupRelativePaths\)/);
-  assert.match(script, /Remove-Item.+-Recurse.+-Force.+-ErrorAction Stop/);
-  assert.match(script, /catch \{/);
+  const containment = readPowerShellFunction(script, 'Test-EdgeCleanupTarget');
+  assert.match(containment, /\[IO\.Path\]::GetFullPath/);
+  assert.match(containment, /StringComparison\]::OrdinalIgnoreCase/);
+  const cleanup = readPowerShellFunction(script, 'Clear-DisposableEdgeProfile');
+  assert.match(cleanup, /foreach \(\$relativePath in \$EdgeCleanupRelativePaths\)/);
+  assert.match(cleanup, /Remove-Item.+-Recurse.+-Force.+-ErrorAction Stop/);
+  assert.ok(cleanup.indexOf('Test-EdgeCleanupTarget') < cleanup.indexOf('Remove-Item'));
+  assert.match(cleanup.slice(cleanup.indexOf('Remove-Item')), /\r?\n\s*\} catch \{/);
+});
+
+test('installer skips cleanup while dedicated Edge processes remain', () => {
+  const script = readFileSync(join(root, 'windows/install.ps1'), 'utf8');
+  const query = readPowerShellFunction(script, 'Get-DedicatedEdgeProcesses');
+  assert.match(query, /Get-CimInstance -ClassName Win32_Process/);
+  assert.match(query, /msedge\.exe/);
+  assert.match(query, /\$EdgeProfileDir/);
+  const stop = readPowerShellFunction(script, 'Stop-DedicatedEdge');
+  assert.match(stop, /Get-DedicatedEdgeProcesses/);
+  const cleanup = readPowerShellFunction(script, 'Clear-DisposableEdgeProfile');
+  const recheck = cleanup.indexOf('$dedicatedEdgeProcesses = @(Get-DedicatedEdgeProcesses)');
+  const remove = cleanup.indexOf('Remove-Item');
+  assert.ok(recheck > -1 && remove > recheck, 'cleanup must recheck Edge before removing any path');
+  const liveEdgeGuard = cleanup.slice(recheck, remove);
+  assert.match(liveEdgeGuard, /if \(\$dedicatedEdgeProcesses\.Count -gt 0\)/);
+  assert.match(liveEdgeGuard, /Write-Warning/);
+  assert.match(liveEdgeGuard, /return/);
 });
 
 test('installer cleans Edge profile only after stopping the old instance and before installing the prepared app', () => {
