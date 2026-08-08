@@ -103,6 +103,25 @@ active instruction chain, and parent task remain controlling.
 - Do not claim that a child used a configured role, model, reasoning effort, or sandbox unless the
   runtime actually selected that role or provides corresponding execution metadata.
 
+### Delegation Granularity
+
+- Delegate by coherent ownership boundary, not mechanically by numbered plan task. One delegated
+  worker may execute adjacent approved-plan tasks when they share the same subsystem, files,
+  contracts, and implementation context, provided their acceptance criteria and validation remain
+  distinct.
+- Do not delegate a fresh explorer pass when an approved plan already contains a current, exact map
+  of the relevant files, contracts, tests, and commands. Use `terra_explorer` when discovery is
+  genuinely needed or implementation reveals drift from the plan.
+- Prefer `luna_implementer` for bounded low-risk implementation. Give it the complete deliverable,
+  assigned files or responsibility, acceptance criteria, and targeted validation rather than
+  prescribing every mechanical edit and test cycle.
+- Use `terra_workhorse` when related approved changes form one integration-heavy ownership boundary
+  or require repository judgment beyond Luna's role.
+- Use `sol_reviewer` only for a concrete exceptional-risk surface in the resulting diff. Ordinary
+  coherent review belongs to `terra_reviewer`.
+
+### Role Semantics
+
 - **`luna_implementer`:** default delegated implementation role for a well-specified,
   pattern-following, low-risk change or a bounded implementation step from an approved plan. Prefer
   it over doing such non-trivial work in the Sol parent when the task can be handed off with explicit
@@ -126,6 +145,9 @@ active instruction chain, and parent task remain controlling.
 
 Keep review batches coherent by subsystem and risk rather than assigning one reviewer per checklist
 item. Reuse the same reviewer for follow-up on the same implementation context when practical.
+
+When executing an approved multi-step plan with delegated agents, follow `.codex/ORCHESTRATION.md`
+and the repository-specific adapter in `.codex/PROJECT.md` when those files are present.
 
 If the repository has no named SSOT, documentation router, or standard validation gate, treat the
 active instruction chain, owning README, manifests, and CI configuration as the available authority.
