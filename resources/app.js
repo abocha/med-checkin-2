@@ -121,20 +121,57 @@ function setConnection(online) {
   $('#connection-label').textContent = online ? 'Работает локально' : 'Нет связи с ядром';
 }
 
+function updatePresentation(update) {
+  const checked = update.lastCheckedAt
+    ? `Проверено: ${formatStoredTime(update.lastCheckedAt, { date: true })}.`
+    : '';
+
+  if (update.error) {
+    return {
+      statusText: update.error,
+      checkDisabled: ['checking', 'downloading', 'launching', 'installing'].includes(update.phase),
+      showInstall: update.phase === 'available' && Boolean(update.availableVersion),
+      installDisabled: false,
+      showNotes: Boolean(update.releaseNotes),
+      installLabel: 'Повторить обновление'
+    };
+  }
+
+  switch (update.phase) {
+    case 'checking':
+      return { statusText: 'Проверяем обновления…', checkDisabled: true, showInstall: false, installDisabled: true, showNotes: false, installLabel: 'Обновить' };
+    case 'current':
+      return { statusText: `У вас установлена последняя версия. ${checked}`.trim(), checkDisabled: false, showInstall: false, installDisabled: true, showNotes: false, installLabel: 'Обновить' };
+    case 'available':
+      return { statusText: `Доступна версия ${update.availableVersion}. ${checked}`.trim(), checkDisabled: false, showInstall: true, installDisabled: false, showNotes: true, installLabel: 'Обновить' };
+    case 'downloading':
+      return { statusText: `Скачиваем и проверяем обновление ${update.availableVersion}…`, checkDisabled: true, showInstall: true, installDisabled: true, showNotes: true, installLabel: 'Подготовка…' };
+    case 'launching':
+      return { statusText: `Запускаем установщик ${update.availableVersion}…`, checkDisabled: true, showInstall: true, installDisabled: true, showNotes: true, installLabel: 'Запускаем…' };
+    case 'installing':
+      return { statusText: 'Установщик запущен. Приложение перезапустится автоматически.', checkDisabled: true, showInstall: false, installDisabled: true, showNotes: true, installLabel: 'Обновить' };
+    default:
+      return { statusText: checked || 'Проверка обновлений ещё не выполнялась.', checkDisabled: false, showInstall: false, installDisabled: true, showNotes: false, installLabel: 'Обновить' };
+  }
+}
+
 function renderUpdates() {
   const update = state.updates;
   if (!update) return;
   $('#installed-version').textContent = `Версия ${update.installedVersion}`;
-  const checked = update.lastCheckedAt ? `Последняя проверка: ${formatStoredTime(update.lastCheckedAt, { date: true })}.` : 'Проверка обновлений ещё не выполнялась.';
-  const available = update.availableVersion ? ` Доступна версия ${update.availableVersion}.` : '';
-  $('#update-status').textContent = update.error ? update.error : `${checked}${available}`;
-  const notes = $('#update-notes'); notes.textContent = update.releaseNotes || ''; notes.hidden = !update.releaseNotes;
-  $('#install-update').hidden = !update.availableVersion;
-  $('#update-available').classList.toggle('hidden', !update.availableVersion);
+  const presentation = updatePresentation(update);
+  $('#update-status').textContent = presentation.statusText;
+  $('#check-updates').disabled = presentation.checkDisabled;
+  $('#install-update').hidden = !presentation.showInstall;
+  $('#install-update').disabled = presentation.installDisabled;
+  $('#install-update').textContent = presentation.installLabel;
+  const notes = $('#update-notes'); notes.textContent = update.releaseNotes || ''; notes.hidden = !presentation.showNotes || !update.releaseNotes;
+  const hasAvailableUpdate = update.phase === 'available' && Boolean(update.availableVersion);
+  $('#update-available').classList.toggle('hidden', !hasAvailableUpdate);
 }
 
 async function checkUpdates() { try { state.updates = await api('/api/v1/updates/check', { method: 'POST' }); renderUpdates(); } catch (error) { toast(`Не удалось проверить обновления: ${error.message}`); } }
-async function installUpdate() { try { state.updates = await api('/api/v1/updates/install', { method: 'POST' }); renderUpdates(); toast('Подготовка обновления…'); } catch (error) { toast(`Не удалось подготовить обновление: ${error.message}`); } }
+async function installUpdate() { try { state.updates = await api('/api/v1/updates/install', { method: 'POST' }); renderUpdates(); } catch (error) { toast(`Не удалось подготовить обновление: ${error.message}`); } }
 
 function trackedItemsFor(category, selected = []) {
   const selectedSet = new Set(selected);
@@ -161,6 +198,7 @@ function buildDraftFlagValues(values = {}, staleFlags = []) {
 }
 
 if (globalThis.__MED_CHECKIN_TEST__) {
+  globalThis.__MED_CHECKIN_TEST__.updatePresentation = updatePresentation;
   globalThis.__MED_CHECKIN_TEST__.draftLifecycle = { state, restoreDraft, persistDraft, validForSave, discardDraft, markDirty, normalizeDraftScaleState, findStaleDraftScaleIds, renderScaleInputs, applyScaleDefinitions };
 }
 
