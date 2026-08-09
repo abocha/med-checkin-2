@@ -1,8 +1,5 @@
-export const SCALE_FIELDS = [
-  'mood', 'anxiety', 'irritability', 'energy', 'focus',
-  'functioning', 'sleepQuality', 'appetite'
-];
 import { BUILTIN_TRACKED_ITEMS, trackedIdsForCategory } from './tracked-items.mjs';
+import { BUILTIN_SCALE_DEFINITIONS, normalizeScaleValues } from './scales.mjs';
 
 export const CONTEXT_FIELDS = Object.freeze([...trackedIdsForCategory(BUILTIN_TRACKED_ITEMS, 'context')]);
 export const SYMPTOM_FIELDS = Object.freeze([...trackedIdsForCategory(BUILTIN_TRACKED_ITEMS, 'symptoms')]);
@@ -15,16 +12,6 @@ export const DEFAULT_SETTINGS = Object.freeze({
   repeatMinutes: 30,
   remindersPausedUntil: null
 });
-
-function normalizeScale(value, field, required) {
-  if (value === '' || value === null || value === undefined) {
-    if (required) throw new TypeError(`${field} is required`);
-    return null;
-  }
-  const number = Number(value);
-  if (!Number.isFinite(number) || number < 0 || number > 10) throw new TypeError(`Invalid ${field}`);
-  return Math.round(number * 10) / 10;
-}
 
 function optionalHours(value) {
   if (value === '' || value === null || value === undefined) return null;
@@ -61,7 +48,13 @@ function normalizeTimestamp(value, field, { nullable = false } = {}) {
   return value;
 }
 
-export function normalizeCheckin(input = {}, { allowMissingObservedAt = false, trackedItems = BUILTIN_TRACKED_ITEMS } = {}) {
+export function normalizeCheckin(input = {}, {
+  allowMissingObservedAt = false,
+  trackedItems = BUILTIN_TRACKED_ITEMS,
+  scaleDefinitions = BUILTIN_SCALE_DEFINITIONS,
+  requiredScaleIds = null,
+  allowedInactiveScaleIds = []
+} = {}) {
   if (!isLocalDate(input.localDate)) throw new TypeError('Invalid localDate');
 
   const kind = input.kind;
@@ -87,9 +80,12 @@ export function normalizeCheckin(input = {}, { allowMissingObservedAt = false, t
     redFlags: normalizeText(input.redFlags)
   };
 
-  for (const field of SCALE_FIELDS) normalized[field] = normalizeScale(input[field], field, kind === 'scheduled');
+  normalized.scales = normalizeScaleValues(input.scales ?? {}, scaleDefinitions, {
+    requiredIds: requiredScaleIds,
+    allowedInactiveIds: allowedInactiveScaleIds
+  });
   if (kind === 'extra') {
-    const hasMeaningfulValue = SCALE_FIELDS.some((field) => normalized[field] !== null)
+    const hasMeaningfulValue = Object.keys(normalized.scales).length > 0
       || normalized.nightSleepHours !== null || normalized.daySleepHours !== null
       || normalized.sleepStart !== null || normalized.wakeTime !== null
       || normalized.context.length > 0 || normalized.symptoms.length > 0 || normalized.activation.length > 0

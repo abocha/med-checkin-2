@@ -1,6 +1,7 @@
 import { BUILTIN_TRACKED_ITEMS } from './tracked-items.mjs';
+import { BUILTIN_SCALE_DEFINITIONS } from './scales.mjs';
 
-export const LATEST_SCHEMA_VERSION = 2;
+export const LATEST_SCHEMA_VERSION = 3;
 
 export function createTrackedItemsSchema(db) {
   db.exec(`
@@ -23,6 +24,27 @@ export function createTrackedItemsSchema(db) {
   }
 }
 
+export function createScaleSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scale_definitions (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      active INTEGER NOT NULL CHECK(active IN (0,1)),
+      sort_order INTEGER NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS checkin_scale_values (
+      checkin_id INTEGER NOT NULL REFERENCES checkins(id) ON DELETE CASCADE,
+      scale_id TEXT NOT NULL REFERENCES scale_definitions(id),
+      value REAL NOT NULL CHECK(value >= 0 AND value <= 10),
+      PRIMARY KEY(checkin_id, scale_id)
+    ) STRICT;
+  `);
+  const insert = db.prepare('INSERT OR IGNORE INTO scale_definitions(id, label, active, sort_order) VALUES (?, ?, ?, ?)');
+  for (const definition of BUILTIN_SCALE_DEFINITIONS) {
+    insert.run(definition.id, definition.label, Number(definition.active), definition.sortOrder);
+  }
+}
+
 export function createLatestSchema(db, { setUserVersion = true } = {}) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS checkins (
@@ -34,9 +56,6 @@ export function createLatestSchema(db, { setUserVersion = true } = {}) {
       observed_at TEXT,
       recorded_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      mood REAL, anxiety REAL, irritability REAL,
-      energy REAL, focus REAL, functioning REAL,
-      sleep_quality REAL, appetite REAL,
       night_sleep_hours REAL, day_sleep_hours REAL, sleep_start TEXT, wake_time TEXT,
       context_json TEXT NOT NULL DEFAULT '[]', symptoms_json TEXT NOT NULL DEFAULT '[]',
       activation_json TEXT NOT NULL DEFAULT '[]', notes TEXT NOT NULL DEFAULT '',
@@ -71,5 +90,6 @@ export function createLatestSchema(db, { setUserVersion = true } = {}) {
       ON treatment_events((1)) WHERE effective_date IS NULL;
   `);
   createTrackedItemsSchema(db);
+  createScaleSchema(db);
   if (setUserVersion) db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION}`);
 }
