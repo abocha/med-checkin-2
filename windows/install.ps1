@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$AppName = 'Med Check-in 2.3.0'
+$AppName = 'Med Check-in 2.4.0'
 $MainTaskName = 'Med Check-in 2.0'
 $WatchdogTaskName = 'Med Check-in 2.0 Watchdog'
 $NodeVersion = '22.23.1'
@@ -36,7 +36,8 @@ $NodeUrl = "https://nodejs.org/dist/v$NodeVersion/$NodeArchive"
 $DiagnosticsFile = Join-Path $DataDir 'install-diagnostics.txt'
 
 function Write-Step([string]$Message) {
-  Write-Host "`n==> $Message" -ForegroundColor Cyan
+  Write-Host "
+==> $Message" -ForegroundColor Cyan
 }
 
 function Download-File([string]$Url, [string]$Destination) {
@@ -246,7 +247,7 @@ function Write-InstallDiagnostics([string]$Reason) {
   try {
     New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
     $lines = New-Object 'System.Collections.Generic.List[string]'
-    $lines.Add('Med Check-in 2.3.0 installation diagnostics')
+    $lines.Add('Med Check-in 2.4.0 installation diagnostics')
     $lines.Add('Generated: ' + [datetime]::UtcNow.ToString('o'))
     $lines.Add('Reason: ' + $Reason)
     $lines.Add('')
@@ -412,19 +413,19 @@ function Save-Shortcut([string]$ShortcutPath) {
   $shortcut.WorkingDirectory = $InstallDir
   $iconPath = Join-Path $InstallDir 'resources\icons\app.ico'
   $shortcut.IconLocation = $iconPath + ',0'
-  $shortcut.Description = 'Med Check-in 2.3'
+  $shortcut.Description = 'Med Check-in 2.4'
   $shortcut.Save()
 }
 
 function Create-Shortcuts {
   $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
   $desktop = [Environment]::GetFolderPath('Desktop')
-  foreach ($name in @('Med Check-in 2.0.lnk', 'Med Check-in 2.1.lnk', 'Med Check-in 2.2.lnk', 'Med Check-in 2.3.lnk')) {
+  foreach ($name in @('Med Check-in 2.0.lnk', 'Med Check-in 2.1.lnk', 'Med Check-in 2.2.lnk', 'Med Check-in 2.3.lnk', 'Med Check-in 2.4.lnk')) {
     Remove-Item (Join-Path $startMenu $name) -Force -ErrorAction SilentlyContinue
     Remove-Item (Join-Path $desktop $name) -Force -ErrorAction SilentlyContinue
   }
-  Save-Shortcut (Join-Path $startMenu 'Med Check-in 2.3.lnk')
-  Save-Shortcut (Join-Path $desktop 'Med Check-in 2.3.lnk')
+  Save-Shortcut (Join-Path $startMenu 'Med Check-in 2.4.lnk')
+  Save-Shortcut (Join-Path $desktop 'Med Check-in 2.4.lnk')
 }
 
 try {
@@ -452,7 +453,8 @@ try {
   & (Join-Path $env:WINDIR 'System32\wscript.exe') (Join-Path $InstallDir 'windows\launch-hidden.vbs') '--show'
   Wait-ForApplication $launchStartedAt
 
-  Write-Host "`n$AppName has been installed." -ForegroundColor Green
+  Write-Host "
+$AppName has been installed." -ForegroundColor Green
   Write-Host 'It will start automatically when you sign in and remind you at 13:00 and 22:00.'
   Write-Host "Data directory: $DataDir"
 } catch {

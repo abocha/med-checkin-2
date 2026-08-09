@@ -3,16 +3,9 @@ const state = {
   apiBase: null, token: null, settings: null, currentDate: null, currentKind: 'scheduled', currentPeriod: 'day',
   currentRecord: null, activeReminder: null, eventSource: null, toastTimer: null, extraDraftKey: null,
   dirty: false, draftTimer: null, pauseTimer: null, suppressDirty: false, historyOffset: 0, historyItems: [], treatmentEvents: [], pendingImport: null,
-  trackedItems: [], selectedTrendFields: ['mood', 'energy', 'focus', 'functioning'], analyticsData: null, staleDraftFlags: [], updates: null
+  trackedItems: [], scaleDefinitions: [], selectedTrendFields: [], analyticsData: null, staleDraftFlags: [], staleDraftScaleIds: [], restoredDraftScaleSnapshot: null, updates: null
 };
-
-const metricLabels = {
-  mood: 'Настроение', anxiety: 'Тревога', irritability: 'Раздражительность', energy: 'Энергия',
-  focus: 'Концентрация', functioning: 'Функционирование', sleepQuality: 'Сон', appetite: 'Аппетит'
-};
-const scaleFields = Object.keys(metricLabels);
 const trackedCategoryLabels = { context: 'Контекст дня', symptoms: 'Телесные и побочные симптомы', activation: 'Необычная активация' };
-const trendDefaults = ['mood', 'energy', 'focus', 'functioning'];
 
 function $(selector, root = document) { return root.querySelector(selector); }
 function $$(selector, root = document) { return [...root.querySelectorAll(selector)]; }
@@ -36,6 +29,67 @@ function formatStoredTime(value, { date = false } = {}) {
   return new Date(value).toLocaleString('ru-RU', date ? { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' } : { hour: '2-digit', minute: '2-digit' });
 }
 function regimenText(regimen = []) { return regimen.length ? regimen.map(item => `${item.name} ${item.amount} ${item.unit}${item.timing ? ` · ${item.timing}` : ''}`).join(' · ') : 'Нет активных препаратов'; }
+function scaleDefinitionMap() { return new Map(state.scaleDefinitions.map(definition => [definition.id, definition])); }
+function activeScaleDefinitions() { return state.scaleDefinitions.filter(definition => definition.active).sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id)); }
+function orderedDefinitionsForIds(ids = []) {
+  const wanted = [...new Set(ids)]; const map = scaleDefinitionMap();
+  return wanted.map((id, index) => map.get(id) || { id, label: `${id} (неизвестная шкала)`, active: false, sortOrder: 100000 + index })
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
+}
+function currentRenderedScaleIds() { return $$('input[type="range"]').map(input => input.name).filter(Boolean); }
+function clearScaleValue(event) {
+  const id = event.currentTarget.dataset.scaleClear;
+  const form = $('#checkin-form');
+  const input = form?.elements?.[id];
+  if (!input) return;
+  setScale(input, null);
+  markDirty();
+}
+function renderedScaleState() {
+  const form = $('#checkin-form');
+  const ids = currentRenderedScaleIds();
+  return {
+    ids,
+    values: Object.fromEntries(ids.map(id => [id, form?.elements?.[id]?.value])),
+    chosenIds: ids.filter(id => form?.elements?.[id]?.dataset?.chosen === 'true')
+  };
+}
+function renderScaleInputs(ids = activeScaleDefinitions().map(definition => definition.id), { values = {}, chosenIds = null } = {}) {
+  const container = $('#scale-inputs');
+  const definitions = orderedDefinitionsForIds(ids);
+  if (container) {
+    const canClear = state.currentKind === 'extra';
+    container.innerHTML = definitions.map(definition => `<label class="scale-row${definition.active ? '' : ' archived'}"><span>${escapeHtml(definition.label)}${definition.active ? '' : ' <small>(архивная)</small>'}</span><input type="range" name="${escapeHtml(definition.id)}" min="0" max="10" step="1"><output>—</output>${canClear ? `<button type="button" class="ghost scale-clear" data-scale-clear="${escapeHtml(definition.id)}">Очистить</button>` : ''}</label>`).join('');
+    $$('[data-scale-clear]', container).forEach(button => button.addEventListener('click', clearScaleValue));
+  }
+  const form = $('#checkin-form');
+  for (const definition of definitions) {
+    const escapedId = globalThis.CSS?.escape ? globalThis.CSS.escape(definition.id) : definition.id.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+    const input = form?.elements?.[definition.id] || $(`input[name="${escapedId}"]`);
+    if (input) setScale(input, chosenIds === null ? values[definition.id] : (chosenIds.includes(definition.id) ? values[definition.id] : null));
+  }
+  setRanges();
+}
+function applyScaleDefinitions(items) {
+  state.scaleDefinitions = Array.isArray(items) ? items.map(item => ({ ...item })) : [];
+  renderScaleSettings();
+  const existing = renderedScaleState();
+  const preservedScheduled = state.currentKind === 'scheduled' && (state.currentRecord?.id || state.restoredDraftScaleSnapshot);
+  if (preservedScheduled) {
+    const ids = existing.ids.length ? existing.ids : (state.currentRecord?.scales ? Object.keys(state.currentRecord.scales) : state.restoredDraftScaleSnapshot);
+    const fallbackValues = state.currentRecord?.scales || {};
+    const values = existing.ids.length ? existing.values : fallbackValues;
+    const chosenIds = existing.ids.length ? existing.chosenIds : Object.keys(fallbackValues);
+    renderScaleInputs(ids, { values, chosenIds });
+  }
+  const pristineNewScheduled = state.currentKind === 'scheduled' && !state.currentRecord?.id && !state.dirty && !state.restoredDraftScaleSnapshot;
+  if (pristineNewScheduled) {
+    renderScaleInputs(activeScaleDefinitions().map(definition => definition.id));
+  } else if (state.currentKind === 'scheduled' && !state.currentRecord?.id && (state.dirty || state.restoredDraftScaleSnapshot)) {
+    $('#save-status').textContent = 'Настройки шкал изменились; текущий черновик сохранён без изменений.';
+    toast('Настройки шкал изменились. Текущая запись сохранена без изменений.');
+  }
+}
 
 function toast(message) {
   const element = $('#toast');
@@ -107,7 +161,7 @@ function buildDraftFlagValues(values = {}, staleFlags = []) {
 }
 
 if (globalThis.__MED_CHECKIN_TEST__) {
-  globalThis.__MED_CHECKIN_TEST__.draftLifecycle = { state, restoreDraft, persistDraft, validForSave, discardDraft, markDirty };
+  globalThis.__MED_CHECKIN_TEST__.draftLifecycle = { state, restoreDraft, persistDraft, validForSave, discardDraft, markDirty, normalizeDraftScaleState, findStaleDraftScaleIds, renderScaleInputs, applyScaleDefinitions };
 }
 
 function renderTrackedItems(selected = currentFlagSelections()) {
@@ -129,6 +183,41 @@ function renderTrackedSettings() {
   $$('[data-tracked-save]', root).forEach(button => button.addEventListener('click', saveTrackedItem));
   $$('[data-tracked-up]', root).forEach(button => button.addEventListener('click', event => moveTrackedItem(event, -1)));
   $$('[data-tracked-down]', root).forEach(button => button.addEventListener('click', event => moveTrackedItem(event, 1)));
+}
+
+function renderScaleSettings() {
+  const root = $('#scale-definitions-settings');
+  if (!root) return;
+  const active = activeScaleDefinitions();
+  const archived = state.scaleDefinitions.filter(item => !item.active).sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
+  root.innerHTML = `<form class="tracked-add-form scale-add-form"><input name="label" type="text" maxlength="120" required placeholder="Новая шкала"><button type="submit" class="secondary">Добавить</button></form><div class="tracked-settings-list">${active.map((item, index) => `<div class="tracked-settings-row" data-scale-id="${escapeHtml(item.id)}"><input type="text" data-scale-label value="${escapeHtml(item.label)}"><button type="button" class="ghost" data-scale-save>Сохранить</button><button type="button" class="ghost" data-scale-up${index ? '' : ' disabled'}>↑</button><button type="button" class="ghost" data-scale-down${index < active.length - 1 ? '' : ' disabled'}>↓</button><button type="button" class="ghost" data-scale-archive${active.length === 1 ? ' disabled' : ''}>Архивировать</button></div>`).join('') || '<p class="muted">Нет активных шкал.</p>'}</div><h4>Архивные</h4><div class="tracked-settings-list">${archived.map(item => `<div class="tracked-settings-row archived" data-scale-id="${escapeHtml(item.id)}"><span>${escapeHtml(item.label)}</span><button type="button" class="ghost" data-scale-restore>Вернуть</button></div>`).join('') || '<p class="muted">Нет архивных шкал.</p>'}</div>`;
+  root.querySelector('form')?.addEventListener('submit', addScaleDefinition);
+  $$('[data-scale-save]', root).forEach(button => button.addEventListener('click', saveScaleDefinition));
+  $$('[data-scale-up]', root).forEach(button => button.addEventListener('click', event => moveScaleDefinition(event, -1)));
+  $$('[data-scale-down]', root).forEach(button => button.addEventListener('click', event => moveScaleDefinition(event, 1)));
+  $$('[data-scale-archive]', root).forEach(button => button.addEventListener('click', event => updateScaleDefinition(event, false)));
+  $$('[data-scale-restore]', root).forEach(button => button.addEventListener('click', event => updateScaleDefinition(event, true)));
+}
+async function addScaleDefinition(event) {
+  event.preventDefault(); const label = event.currentTarget.elements.label.value;
+  try { const result = await api('/api/v1/scale-definitions', { method: 'POST', body: JSON.stringify({ label }) }); applyScaleDefinitions(result.scaleDefinitions); event.currentTarget.reset(); toast('Шкала добавлена'); }
+  catch (error) { toast(`Не удалось добавить шкалу: ${error.message}`); }
+}
+async function saveScaleDefinition(event) {
+  const row = event.currentTarget.closest('[data-scale-id]');
+  try { const result = await api(`/api/v1/scale-definitions/${encodeURIComponent(row.dataset.scaleId)}`, { method: 'PUT', body: JSON.stringify({ label: row.querySelector('[data-scale-label]').value }) }); applyScaleDefinitions(result.scaleDefinitions); toast('Шкала обновлена'); }
+  catch (error) { toast(`Не удалось обновить шкалу: ${error.message}`); }
+}
+async function updateScaleDefinition(event, active) {
+  const row = event.currentTarget.closest('[data-scale-id]');
+  try { const result = await api(`/api/v1/scale-definitions/${encodeURIComponent(row.dataset.scaleId)}`, { method: 'PUT', body: JSON.stringify({ active }) }); applyScaleDefinitions(result.scaleDefinitions); toast(active ? 'Шкала возвращена' : 'Шкала архивирована'); }
+  catch (error) { toast(`Не удалось изменить шкалу: ${error.message}`); }
+}
+async function moveScaleDefinition(event, delta) {
+  const id = event.currentTarget.closest('[data-scale-id]').dataset.scaleId; const ids = activeScaleDefinitions().map(item => item.id); const index = ids.indexOf(id); const target = index + delta;
+  if (index < 0 || target < 0 || target >= ids.length) return; [ids[index], ids[target]] = [ids[target], ids[index]];
+  try { const result = await api('/api/v1/scale-definitions/order', { method: 'PUT', body: JSON.stringify({ ids }) }); applyScaleDefinitions(result.scaleDefinitions); }
+  catch (error) { toast(`Не удалось изменить порядок: ${error.message}`); }
 }
 
 function applyTrackedItems(items) {
@@ -231,10 +320,12 @@ function resetForm({ kind = 'scheduled', period = 'day', date = localDate(), sch
   const effectiveObservedAt = observedAt === undefined ? new Date().toISOString() : observedAt;
   form.elements.observedAt.value = effectiveObservedAt ?? '';
   form.elements.observedAtLocal.value = effectiveObservedAt ? localDateTimeValue(effectiveObservedAt) : '';
-  scaleFields.forEach(name => setScale(form.elements[name], null));
+  renderScaleInputs(activeScaleDefinitions().map(definition => definition.id));
   setFlags('context'); setFlags('symptoms'); setFlags('activation');
   state.currentRecord = null;
   state.staleDraftFlags = [];
+  state.staleDraftScaleIds = [];
+  state.restoredDraftScaleSnapshot = null;
   state.dirty = false;
   $('#edit-state').textContent = kind === 'extra' ? 'Новая дополнительная запись' : 'Новая запись';
   $('#save-status').textContent = 'Изменения ещё не сохранены';
@@ -255,14 +346,15 @@ function fillForm(record) {
     observedAt: record.observedAt
   });
   renderTrackedItems({ context: record.context, symptoms: record.symptoms, activation: record.activation });
+  const ids = record.kind === 'scheduled' ? Object.keys(record.scales || {}) : [...new Set([...activeScaleDefinitions().map(definition => definition.id), ...Object.keys(record.scales || {})])];
+  renderScaleInputs(ids, { values: record.scales || {}, chosenIds: Object.keys(record.scales || {}) });
   const form = $('#checkin-form');
   state.suppressDirty = true;
   state.currentRecord = record;
   state.extraDraftKey = null;
   for (const [name, value] of Object.entries(record)) {
-    if (form.elements[name] && !Array.isArray(value) && !scaleFields.includes(name)) form.elements[name].value = value ?? '';
+    if (form.elements[name] && !Array.isArray(value) && !(name in (record.scales || {}))) form.elements[name].value = value ?? '';
   }
-  scaleFields.forEach(name => setScale(form.elements[name], record[name]));
   setFlags('context', record.context); setFlags('symptoms', record.symptoms); setFlags('activation', record.activation);
   state.dirty = false;
   $('#edit-state').textContent = 'Редактирование';
@@ -273,9 +365,11 @@ function fillForm(record) {
 function draftValues() {
   const form = $('#checkin-form');
   const values = Object.fromEntries(new FormData(form).entries());
+  for (const name of currentRenderedScaleIds()) delete values[name];
   Object.assign(values, buildDraftFlagValues({ context: selectedFlags('context'), symptoms: selectedFlags('symptoms'), activation: selectedFlags('activation') }, state.staleDraftFlags));
-  values.scalesChosen = Object.fromEntries(scaleFields.map(name => [name, form.elements[name].dataset.chosen === 'true']));
-  for (const name of scaleFields) values[name] = form.elements[name].value;
+  values.scaleSnapshot = currentRenderedScaleIds();
+  values.scales = Object.fromEntries(currentRenderedScaleIds().filter(name => form.elements[name]?.dataset.chosen === 'true').map(name => [name, Number(form.elements[name].value)]));
+  values.scalesChosen = Object.fromEntries(currentRenderedScaleIds().map(name => [name, form.elements[name]?.dataset.chosen === 'true']));
   return values;
 }
 
@@ -298,22 +392,42 @@ function discardDraft() {
   MedCheckinDrafts.remove(draftKey());
   if (state.currentKind === 'extra') localStorage.removeItem('med-checkin-extra-draft-key');
   state.staleDraftFlags = [];
+  state.staleDraftScaleIds = [];
+  state.restoredDraftScaleSnapshot = null;
+  if (state.currentKind === 'scheduled' && !state.currentRecord?.id) renderScaleInputs(activeScaleDefinitions().map(definition => definition.id));
   state.dirty = false;
 }
 
 function restoreDraft(draft) {
   const form = $('#checkin-form');
   state.suppressDirty = true;
+  const normalized = normalizeDraftScaleState(draft.values || {});
+  renderScaleInputs(normalized.scaleSnapshot, { values: normalized.scales, chosenIds: normalized.chosenIds });
   for (const [name, value] of Object.entries(draft.values)) {
     if (form.elements[name] && !Array.isArray(value) && name !== 'scalesChosen') form.elements[name].value = value ?? '';
   }
   state.staleDraftFlags = findStaleDraftFlags(draft.values);
+  state.staleDraftScaleIds = findStaleDraftScaleIds(draft.values);
+  state.restoredDraftScaleSnapshot = normalized.scaleSnapshot;
   setFlags('context', draft.values.context); setFlags('symptoms', draft.values.symptoms); setFlags('activation', draft.values.activation);
-  scaleFields.forEach(name => setScale(form.elements[name], draft.values.scalesChosen?.[name] ? draft.values[name] : null));
   state.suppressDirty = false;
   state.dirty = true;
   $('#save-status').textContent = 'Восстановлен черновик';
-  if (state.staleDraftFlags.length) toast('Черновик содержит неизвестные отметки после импорта. Отбрось черновик и начни запись заново.');
+  if (state.staleDraftFlags.length || state.staleDraftScaleIds.length) toast('Черновик содержит неизвестные отметки после импорта. Отбрось черновик и начни запись заново.');
+}
+
+function findStaleDraftScaleIds(values = {}) {
+  const known = scaleDefinitionMap();
+  const snapshot = values.scaleSnapshot || Object.keys(values.scales || {});
+  return [...new Set([...snapshot, ...Object.keys(values.scales || {})].filter(id => !known.has(id)))];
+}
+function normalizeDraftScaleState(values = {}) {
+  const legacyIds = ['mood','anxiety','irritability','energy','focus','functioning','sleepQuality','appetite'];
+  const snapshot = Array.isArray(values.scaleSnapshot) && values.scaleSnapshot.length ? [...new Set(values.scaleSnapshot)] : (values.scales && typeof values.scales === 'object' ? Object.keys(values.scales) : legacyIds);
+  const scales = values.scales && typeof values.scales === 'object' ? { ...values.scales } : Object.fromEntries(legacyIds.filter(id => values[id] !== undefined && values[id] !== '').map(id => [id, Number(values[id])]));
+  const hasChosenState = values.scalesChosen !== null && typeof values.scalesChosen === 'object' && !Array.isArray(values.scalesChosen);
+  const chosenIds = Object.keys(values.scalesChosen || {}).filter(id => values.scalesChosen[id] && Object.hasOwn(scales, id));
+  return { scaleSnapshot: snapshot, scales, chosenIds: hasChosenState ? chosenIds : Object.keys(scales) };
 }
 
 function chooseDialog(id, fallback) {
@@ -362,7 +476,8 @@ function formPayload() {
   payload.observedAt = explicitObservedAt
     ?? (state.currentRecord?.observedAt === null ? null : (payload.observedAt || new Date().toISOString()));
   payload.localDate = state.currentKind === 'extra' ? localDate(new Date(payload.observedAt)) : state.currentDate;
-  for (const name of scaleFields) payload[name] = form.elements[name].dataset.chosen === 'true' ? Number(form.elements[name].value) : null;
+  for (const name of currentRenderedScaleIds()) delete payload[name];
+  payload.scales = Object.fromEntries(currentRenderedScaleIds().filter(name => form.elements[name]?.dataset.chosen === 'true').map(name => [name, Number(form.elements[name].value)]));
   payload.nightSleepHours = payload.nightSleepHours === '' ? null : Number(payload.nightSleepHours);
   payload.daySleepHours = payload.daySleepHours === '' ? null : Number(payload.daySleepHours);
   payload.context = selectedFlags('context'); payload.symptoms = selectedFlags('symptoms'); payload.activation = selectedFlags('activation');
@@ -370,13 +485,25 @@ function formPayload() {
 }
 
 function validForSave(payload) {
-  if (state.staleDraftFlags.length) { toast('Отбрось черновик с неизвестными отметками и начни запись заново.'); return false; }
-  if (payload.kind === 'scheduled' && scaleFields.some(name => payload[name] === null)) {
-    toast('Для запланированного чек-ина выбери все восемь шкал.');
+  if (state.staleDraftFlags.length || state.staleDraftScaleIds.length) { toast('Отбрось черновик с неизвестными отметками и начни запись заново.'); return false; }
+  if (payload.kind === 'scheduled' && currentRenderedScaleIds().some(name => payload.scales?.[name] === undefined)) {
+    toast('Для запланированного чек-ина выбери все шкалы.');
     return false;
   }
+  if (payload.kind === 'scheduled' && !state.currentRecord?.id) {
+    const activeIds = activeScaleDefinitions().map(definition => definition.id);
+    const submittedIds = Object.keys(payload.scales || {});
+    const matchesActive = activeIds.length === submittedIds.length && activeIds.every(id => submittedIds.includes(id));
+    if (!matchesActive) {
+      toast(state.restoredDraftScaleSnapshot
+        ? 'Черновик сохранён, но его набор шкал устарел. Отбрось его и создай новую запись.'
+        : 'Для новой запланированной записи выбери все текущие активные шкалы.');
+      return false;
+    }
+  }
   if (payload.kind === 'extra') {
-    const meaningful = scaleFields.some(name => payload[name] !== null)
+    const legacyScaleMeaningful = !payload.scales && Object.entries(payload).some(([key, value]) => !['id', 'localDate', 'period', 'kind', 'scheduledFor', 'observedAt', 'observedAtLocal', 'nightSleepHours', 'daySleepHours'].includes(key) && Number.isFinite(Number(value)));
+    const meaningful = Object.keys(payload.scales || {}).length > 0 || legacyScaleMeaningful
       || payload.nightSleepHours !== null || payload.daySleepHours !== null || payload.sleepStart || payload.wakeTime
       || payload.context.length || payload.symptoms.length || payload.activation.length || payload.notes.trim() || payload.redFlags.trim();
     if (!meaningful) { toast('Добавь хотя бы одно наблюдение в дополнительную запись.'); return false; }
@@ -452,7 +579,7 @@ async function usePreviousValues() {
     if (!previous) { toast('Нет предыдущей запланированной записи для копирования.'); return; }
     const form = $('#checkin-form');
     state.suppressDirty = true;
-    scaleFields.forEach(name => setScale(form.elements[name], previous[name]));
+    for (const [name, value] of Object.entries(previous.scales || {})) if (form.elements[name]) setScale(form.elements[name], value);
     state.suppressDirty = false;
     markDirty();
   } catch (error) { toast(`Не удалось получить предыдущие значения: ${error.message}`); }
@@ -502,7 +629,7 @@ function renderHistory() {
   if (!state.historyItems.length) { list.innerHTML = '<div class="empty">Пока нет записей по этому фильтру.</div>'; return; }
   list.innerHTML = state.historyItems.map(item => `<article class="history-item">
     <div class="history-date">${escapeHtml(niceDate(item.localDate))}<small>${item.kind === 'extra' ? 'Дополнительная запись' : `${periodLabel(item.period)}${item.scheduledFor ? ` · запланировано ${formatStoredTime(item.scheduledFor)}` : ''}`}</small></div>
-    <div><div class="metric-chips">${['mood', 'energy', 'focus', 'functioning', 'anxiety'].filter(key => item[key] != null).map(key => `<span class="metric-chip">${metricLabels[key]} <b>${round(item[key])}</b></span>`).join('')}</div>${item.notes ? `<p class="muted" style="margin-top:8px">${escapeHtml(item.notes.slice(0, 180))}</p>` : ''}<div class="record-timing">${timingLines(item)}</div></div>
+    <div><div class="metric-chips">${Object.entries(item.scales || {}).map(([key, value]) => { const definition = scaleDefinitionMap().get(key); return `<span class="metric-chip">${escapeHtml(definition?.label || `${key} (архивная)`)} <b>${round(value)}</b></span>`; }).join('')}</div>${item.notes ? `<p class="muted" style="margin-top:8px">${escapeHtml(item.notes.slice(0, 180))}</p>` : ''}<div class="record-timing">${timingLines(item)}</div></div>
     <div class="button-row"><button type="button" class="secondary" data-edit-id="${item.id}">Открыть</button><button type="button" class="ghost" data-delete-id="${item.id}">Удалить</button></div>
   </article>`).join('');
   $$('[data-edit-id]').forEach(button => button.addEventListener('click', async () => { const record = await api(`/api/v1/checkins/${button.dataset.editId}`); await openRecord(record); }));
@@ -524,13 +651,24 @@ async function loadHistory(append = false) {
 
 function comparisonTable(rows, columns) { return `<table class="comparison-table"><thead><tr><th>Показатель</th>${columns.map(c => `<th>${c.label}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr><td>${row.label}</td>${columns.map(c => `<td>${round(c.values[row.key])}</td>`).join('')}</tr>`).join('')}</tbody></table>`; }
 function selectedTrendFields() { return $$('[data-trend-field]:checked').map(input => input.dataset.trendField); }
+function renderTrendFields(data) {
+  const root = $('#trend-fields'); if (!root) return;
+  const usable = new Set(Object.keys(data.overall || {}));
+  const ordered = state.scaleDefinitions.filter(definition => usable.has(definition.id)).sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
+  const selected = new Set(state.selectedTrendFields.filter(id => usable.has(id)));
+  if (!selected.size) ordered.slice(0, 4).forEach(definition => selected.add(definition.id));
+  state.selectedTrendFields = [...selected];
+  root.innerHTML = ordered.map(definition => `<label><input type="checkbox" data-trend-field="${escapeHtml(definition.id)}"${selected.has(definition.id) ? ' checked' : ''}> ${escapeHtml(definition.label)}</label>`).join('') || '<span class="muted">Недостаточно данных для графика.</span>';
+  $$('[data-trend-field]', root).forEach(input => input.addEventListener('change', () => { state.selectedTrendFields = selectedTrendFields(); renderAnalytics(data); }));
+}
 function renderAnalytics(data) {
-  $('#analytics-kpis').innerHTML = [['Запланированных', data.count], ['Дней', data.days], ['Среднее настроение', round(data.overall.mood)], ['Средняя тревога', round(data.overall.anxiety)]].map(([label, value]) => `<div class="kpi"><strong>${value}</strong><span>${label}</span></div>`).join('');
+  $('#analytics-kpis').innerHTML = [['Запланированных', data.count], ['Дней', data.days], ['Пар День/Вечер', data.pairedDays]].map(([label, value]) => `<div class="kpi"><strong>${value}</strong><span>${label}</span></div>`).join('');
+  renderTrendFields(data);
   const completion = data.completion;
   $('#completion-stats').innerHTML = `<h3>Выполнение расписания</h3><p class="muted">${completion.opportunities ? `${completion.completed} из ${completion.opportunities} прошедших или отмеченных заранее запланированных периодов (${round(completion.rate)}%)` : 'Пока нет прошедших запланированных периодов.'}</p>`;
-  ChartLite.renderTrend($('#trend-chart'), data.daily, data.treatmentMarkers, state.selectedTrendFields);
-  const rows = ['mood', 'energy', 'focus', 'functioning', 'anxiety'].map(key => ({ key, label: metricLabels[key] }));
-  $('#paired-comparison').innerHTML = data.pairedDays ? `<p class="muted" style="margin-bottom:10px">Средняя разница «вечер минус день» на ${data.pairedDays} парных днях.</p>${comparisonTable(rows, [{ label: 'Δ вечером', values: data.pairedDelta }])}` : '<div class="empty">Нужно несколько дней с обеими отметками.</div>';
+  ChartLite.renderTrend($('#trend-chart'), data.daily, data.treatmentMarkers, state.selectedTrendFields, state.scaleDefinitions);
+  const rows = state.scaleDefinitions.filter(definition => Object.hasOwn(data.pairedDelta || {}, definition.id) && Number.isFinite(data.pairedDelta[definition.id])).map(definition => ({ key: definition.id, label: definition.label }));
+  $('#paired-comparison').innerHTML = rows.length ? `<p class="muted" style="margin-bottom:10px">Средняя разница «вечер минус день» только за даты, где оба значения каждой шкалы присутствуют.</p>${comparisonTable(rows, [{ label: 'Δ вечером', values: data.pairedDelta }])}` : '<div class="empty">Нужно несколько дней с обеими отметками.</div>';
   const frequencyItems = Object.entries({ ...data.frequencies.symptoms, ...data.frequencies.activation, ...data.frequencies.context }).map(([key, value]) => ({ label: state.trackedItems.find(item => item.id === key)?.label || key, value })).sort((a, b) => b.value - a.value).slice(0, 10);
   ChartLite.renderBars($('#frequency-chart'), frequencyItems);
 }
@@ -692,11 +830,11 @@ function connectEvents() {
 }
 function initBrowser() { const runtime = MedCheckinStartup.applyBrowserRuntime(window); if (!runtime.token) throw new Error('Отсутствует локальный ключ запуска. Открой приложение через ярлык или значок в трее.'); state.token = runtime.token; state.apiBase = runtime.apiBase; connectEvents(); return runtime; }
 async function bootstrap(runtime) {
-  const data = await api('/api/v1/bootstrap'); state.settings = data.settings; state.updates = data.updates; applyTrackedItems(data.trackedItems || []); state.selectedTrendFields = selectedTrendFields().length ? selectedTrendFields() : trendDefaults; $('#medication-label').textContent = data.currentTreatment?.regimen?.map(item => `${item.name} ${item.amount} ${item.unit}`).join(' · ') || 'Лечение не указано'; renderUpdates();
+  const data = await api('/api/v1/bootstrap'); state.settings = data.settings; state.updates = data.updates; applyScaleDefinitions(data.scaleDefinitions || []); applyTrackedItems(data.trackedItems || []); $('#medication-label').textContent = data.currentTreatment?.regimen?.map(item => `${item.name} ${item.amount} ${item.unit}`).join(' · ') || 'Лечение не указано'; renderUpdates();
   await loadCheckin(runtime.localDate || data.current.localDate, runtime.slot ? slotPeriod(runtime.slot) : data.current.period); fillSettings(); setConnection(true); await switchView(runtime.view || 'checkin');
 }
 function wireUi() {
-  setRanges();
+  setRanges(); renderScaleSettings();
   $$('[data-trend-field]').forEach(input => input.addEventListener('change', () => {
     state.selectedTrendFields = selectedTrendFields();
     if (state.analyticsData) renderAnalytics(state.analyticsData);

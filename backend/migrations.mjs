@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { createTimestampedBackup } from './backups.mjs';
-import { createLatestSchema, createTrackedItemsSchema, LATEST_SCHEMA_VERSION } from './schema.mjs';
+import { LEGACY_SCALE_COLUMNS } from './scales.mjs';
+import { createLatestSchema, LATEST_SCHEMA_VERSION } from './schema.mjs';
 
 function tableExists(db, name) {
   return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
@@ -18,6 +19,36 @@ export function readUserVersion(dbPath) {
   finally { db.close(); }
 }
 
+function migrateLegacyRows(db, sourceVersion) {
+  if (sourceVersion === 0) {
+    db.exec(`
+      INSERT INTO checkins (
+        id, kind, local_date, period, scheduled_for, observed_at, recorded_at, updated_at,
+        night_sleep_hours, day_sleep_hours, sleep_start, wake_time, context_json,
+        symptoms_json, activation_json, notes, red_flags
+      )
+      SELECT id, 'scheduled', local_date,
+        CASE slot WHEN '13:00' THEN 'day' WHEN '22:00' THEN 'evening' END,
+        NULL, NULL, recorded_at, updated_at,
+        night_sleep_hours, day_sleep_hours, sleep_start, wake_time, context_json,
+        symptoms_json, activation_json, notes, red_flags
+      FROM checkins_legacy;
+    `);
+    return;
+  }
+  db.exec(`
+    INSERT INTO checkins (
+      id, kind, local_date, period, scheduled_for, observed_at, recorded_at, updated_at,
+      night_sleep_hours, day_sleep_hours, sleep_start, wake_time, context_json,
+      symptoms_json, activation_json, notes, red_flags
+    )
+    SELECT id, kind, local_date, period, scheduled_for, observed_at, recorded_at, updated_at,
+      night_sleep_hours, day_sleep_hours, sleep_start, wake_time, context_json,
+      symptoms_json, activation_json, notes, red_flags
+    FROM checkins_legacy;
+  `);
+}
+
 export function prepareDatabase({ dbPath, backupDir, now = new Date(), log = () => {} }) {
   const initial = new DatabaseSync(dbPath);
   initial.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
@@ -30,89 +61,53 @@ export function prepareDatabase({ dbPath, backupDir, now = new Date(), log = () 
     initial.close();
     return { migrated: false, backupPath: null, version };
   }
-
   if (!tableExists(initial, 'checkins')) {
     createLatestSchema(initial);
     initial.close();
     return { migrated: false, backupPath: null, version: LATEST_SCHEMA_VERSION };
   }
-
-  if (version === 1) {
-    initial.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-    initial.close();
-    const backupPath = createTimestampedBackup({ dbPath, backupDir, prefix: 'pre-migration', now });
-    const db = new DatabaseSync(dbPath);
-    db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
-    try {
-      db.exec('BEGIN IMMEDIATE');
-      createTrackedItemsSchema(db);
-      db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION}`);
-      db.exec('COMMIT');
-      log('info', 'Database migrated to schema version 2', { backupPath });
-      return { migrated: true, backupPath, version: LATEST_SCHEMA_VERSION };
-    } catch (error) {
-      try { db.exec('ROLLBACK'); } catch {}
-      error.backupPath = backupPath;
-      log('fatal', 'Database migration failed', { backupPath, error: error.message });
-      throw error;
-    } finally { db.close(); }
-  }
-
   const columns = tableColumns(initial, 'checkins');
-  if (!columns.has('slot')) {
+  const isLegacyV0 = version === 0 && columns.has('slot');
+  if (!isLegacyV0 && ![1, 2].includes(version)) {
     initial.close();
     throw new Error('Unrecognized legacy database schema');
   }
-
   initial.exec('PRAGMA wal_checkpoint(TRUNCATE)');
   initial.close();
   const backupPath = createTimestampedBackup({ dbPath, backupDir, prefix: 'pre-migration', now });
-
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   try {
     db.exec('BEGIN IMMEDIATE');
+    db.exec('DROP INDEX IF EXISTS checkins_scheduled_identity');
     db.exec('ALTER TABLE checkins RENAME TO checkins_legacy');
-    if (tableExists(db, 'reminder_state')) db.exec('ALTER TABLE reminder_state RENAME TO reminder_state_legacy');
+    if (isLegacyV0 && tableExists(db, 'reminder_state')) db.exec('ALTER TABLE reminder_state RENAME TO reminder_state_legacy');
     createLatestSchema(db, { setUserVersion: false });
-    db.exec(`
-      INSERT INTO checkins (
-        id, kind, local_date, period, scheduled_for, observed_at, recorded_at, updated_at,
-        mood, anxiety, irritability, energy, focus, functioning, sleep_quality, appetite,
-        night_sleep_hours, day_sleep_hours, sleep_start, wake_time, context_json,
-        symptoms_json, activation_json, notes, red_flags
-      )
-      SELECT
-        id, 'scheduled', local_date,
-        CASE slot WHEN '13:00' THEN 'day' WHEN '22:00' THEN 'evening' END,
-        NULL, NULL, recorded_at, updated_at,
-        mood, anxiety, irritability, energy, focus, functioning, sleep_quality, appetite,
-        night_sleep_hours, day_sleep_hours, sleep_start, wake_time, context_json,
-        symptoms_json, activation_json, notes, red_flags
-      FROM checkins_legacy;
-    `);
-    if (tableExists(db, 'reminder_state_legacy')) {
+    migrateLegacyRows(db, version);
+    for (const [scaleId, column] of Object.entries(LEGACY_SCALE_COLUMNS)) {
+      db.exec(`
+        INSERT INTO checkin_scale_values(checkin_id, scale_id, value)
+        SELECT id, '${scaleId}', ${column} FROM checkins_legacy WHERE ${column} IS NOT NULL;
+      `);
+    }
+    if (isLegacyV0 && tableExists(db, 'reminder_state_legacy')) {
       db.exec(`
         INSERT INTO reminder_state(local_date, period, snoozed_until, dismissed_at, notified_at)
-        SELECT local_date,
-          CASE slot WHEN '13:00' THEN 'day' WHEN '22:00' THEN 'evening' END,
-          snoozed_until, dismissed_at, notified_at
-        FROM reminder_state_legacy;
+        SELECT local_date, CASE slot WHEN '13:00' THEN 'day' WHEN '22:00' THEN 'evening' END,
+          snoozed_until, dismissed_at, notified_at FROM reminder_state_legacy;
+        DROP TABLE reminder_state_legacy;
       `);
-      db.exec('DROP TABLE reminder_state_legacy');
+      db.prepare("DELETE FROM settings WHERE key IN ('treatmentChangeDate','medicationLabel')").run();
     }
-    db.prepare("DELETE FROM settings WHERE key IN ('treatmentChangeDate','medicationLabel')").run();
     db.exec('DROP TABLE checkins_legacy');
     db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION}`);
     db.exec('COMMIT');
-    log('info', 'Database migrated to schema version 2', { backupPath });
+    log('info', 'Database migrated to schema version 3', { backupPath });
     return { migrated: true, backupPath, version: LATEST_SCHEMA_VERSION };
   } catch (error) {
     try { db.exec('ROLLBACK'); } catch {}
     error.backupPath = backupPath;
     log('fatal', 'Database migration failed', { backupPath, error: error.message });
     throw error;
-  } finally {
-    db.close();
-  }
+  } finally { db.close(); }
 }

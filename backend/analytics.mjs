@@ -1,13 +1,16 @@
-import { SCALE_FIELDS } from './domain.mjs';
-
 function average(values) {
   const finite = values.filter(Number.isFinite);
   if (!finite.length) return null;
   return Math.round((finite.reduce((a, b) => a + b, 0) / finite.length) * 100) / 100;
 }
 
+function scaleIds(rows) {
+  return [...new Set(rows.flatMap((row) => Object.keys(row.scales ?? {})))];
+}
+
 function metricMeans(rows) {
-  return Object.fromEntries(SCALE_FIELDS.map((field) => [field, average(rows.map((row) => row[field]))]));
+  const ids = scaleIds(rows);
+  return Object.fromEntries(ids.map((id) => [id, average(rows.map((row) => Number(row.scales?.[id])))]));
 }
 
 function countFlags(rows, field) {
@@ -62,11 +65,11 @@ export function buildAnalytics(rows, settings = {}, { now = new Date(), treatmen
     group.push(row);
     byDate.set(row.localDate, group);
   }
-  const daily = [...byDate.entries()].map(([date, dayRows]) => ({ date, count: dayRows.length, ...metricMeans(dayRows) }));
+  const daily = [...byDate.entries()].map(([date, dayRows]) => ({ date, count: dayRows.length, scales: metricMeans(dayRows) }));
   const byDailyDate = new Map(daily.map((day) => [day.date, day]));
   for (const day of daily) {
     const window = [0, -1, -2].map((offset) => byDailyDate.get(dateOffset(day.date, offset))).filter(Boolean);
-    day.rolling = Object.fromEntries(SCALE_FIELDS.map((field) => [field, average(window.map((item) => item[field]))]));
+    day.rolling = metricMeans(window.map((item) => ({ scales: item.scales })));
   }
 
   const pairedDeltas = [];
@@ -74,11 +77,13 @@ export function buildAnalytics(rows, settings = {}, { now = new Date(), treatmen
     const day = dayRows.find((row) => row.period === 'day');
     const evening = dayRows.find((row) => row.period === 'evening');
     if (!day || !evening) continue;
-    pairedDeltas.push(Object.fromEntries(SCALE_FIELDS.map((field) => [field,
-      Number.isFinite(day[field]) && Number.isFinite(evening[field]) ? evening[field] - day[field] : null
+    const ids = [...new Set([...Object.keys(day.scales ?? {}), ...Object.keys(evening.scales ?? {})])];
+    pairedDeltas.push(Object.fromEntries(ids.map((id) => [id,
+      Number.isFinite(Number(day.scales?.[id])) && Number.isFinite(Number(evening.scales?.[id]))
+        ? Number(evening.scales[id]) - Number(day.scales[id]) : null
     ])));
   }
-  const pairedDelta = Object.fromEntries(SCALE_FIELDS.map((field) => [field, average(pairedDeltas.map((row) => row[field]))]));
+  const pairedDelta = Object.fromEntries(scaleIds(pairedDeltas.map((row) => ({ scales: row }))).map((id) => [id, average(pairedDeltas.map((row) => row[id]))]));
 
   return {
     generatedAt: now.toISOString(),

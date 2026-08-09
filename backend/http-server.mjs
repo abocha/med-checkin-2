@@ -92,12 +92,15 @@ function csvEscape(value) {
   return /[",\n\r]/.test(textValue) ? `"${textValue.replaceAll('"', '""')}"` : textValue;
 }
 
-export function rowsToCsv(rows) {
+export function rowsToCsv(rows, scaleDefinitions = []) {
   const fields = [
-    'localDate','kind','period','scheduledFor','observedAt','recordedAt','updatedAt','mood','anxiety','irritability','energy','focus','functioning',
-    'sleepQuality','appetite','nightSleepHours','daySleepHours','sleepStart','wakeTime','context','symptoms','activation','notes','redFlags'
+    'localDate','kind','period','scheduledFor','observedAt','recordedAt','updatedAt',
+    'nightSleepHours','daySleepHours','sleepStart','wakeTime','context','symptoms','activation','notes','redFlags'
   ];
-  return [fields.join(','), ...rows.map((row) => fields.map((field) => csvEscape(row[field])).join(','))].join('\r\n');
+  const represented = new Set(rows.flatMap((row) => Object.keys(row.scales ?? {})));
+  const definitions = (scaleDefinitions ?? []).filter((definition) => represented.has(definition.id));
+  const headers = [...fields, ...definitions.map((definition) => definition.label)];
+  return [headers.map(csvEscape).join(','), ...rows.map((row) => [...fields.map((field) => csvEscape(row[field])), ...definitions.map((definition) => csvEscape(row.scales?.[definition.id] ?? ''))].join(','))].join('\r\n');
 }
 
 function safeSettings(input, current) {
@@ -187,6 +190,7 @@ export function createHttpServer({ repo, token, dataDir, resourcesDir = null, ho
       return json(res, 200, {
         settings: repo.getSettings(),
         trackedItems: repo.listTrackedItems(),
+        scaleDefinitions: repo.listScaleDefinitions(),
         updates: updateService?.getStatus() ?? null,
         current: { localDate, period, checkin: repo.getScheduledCheckin(localDate, period) },
         recent: repo.listCheckins({ limit: 6 }),
@@ -217,6 +221,29 @@ export function createHttpServer({ repo, token, dataDir, resourcesDir = null, ho
       repo.reorderTrackedItems(body.category, body.ids);
       await onPersisted();
       return json(res, 200, { items: repo.listTrackedItems() });
+    }
+
+    if (url.pathname === '/api/v1/scale-definitions' && req.method === 'POST') {
+      repo.createScaleDefinition(await readBody(req));
+      await onPersisted();
+      return json(res, 201, { scaleDefinitions: repo.listScaleDefinitions() });
+    }
+
+    if (url.pathname === '/api/v1/scale-definitions/order' && req.method === 'PUT') {
+      const body = await readBody(req);
+      repo.reorderScaleDefinitions(body.ids);
+      await onPersisted();
+      return json(res, 200, { scaleDefinitions: repo.listScaleDefinitions() });
+    }
+
+    const scaleDefinitionId = url.pathname.match(/^\/api\/v1\/scale-definitions\/([^/]+)$/);
+    if (scaleDefinitionId && req.method === 'PUT') {
+      let id;
+      try { id = decodeURIComponent(scaleDefinitionId[1]); } catch { return json(res, 400, { error: 'invalid_scale_definition_id' }); }
+      const saved = repo.updateScaleDefinition(id, await readBody(req));
+      if (!saved) return json(res, 404, { error: 'not_found' });
+      await onPersisted();
+      return json(res, 200, { scaleDefinitions: repo.listScaleDefinitions() });
     }
 
     const trackedItemId = url.pathname.match(/^\/api\/v1\/tracked-items\/([^/]+)$/);
@@ -372,7 +399,7 @@ export function createHttpServer({ repo, token, dataDir, resourcesDir = null, ho
       eventHub.broadcast('data-replaced', result);
       return json(res, 200, result);
     }
-    if (url.pathname === '/api/v1/export.csv' && req.method === 'GET') return text(res, 200, rowsToCsv(repo.exportRows()), 'text/csv; charset=utf-8');
+    if (url.pathname === '/api/v1/export.csv' && req.method === 'GET') return text(res, 200, rowsToCsv(repo.exportRows(), repo.listScaleDefinitions()), 'text/csv; charset=utf-8');
     if (url.pathname === '/api/v1/export.json' && req.method === 'GET') return json(res, 200, maintenance?.exportPortable() ?? buildPortableExport(repo, now()));
 
     const control = url.pathname.match(/^\/api\/v1\/control\/(show|close-window|open-data-folder|restart-host|quit|heartbeat)$/);

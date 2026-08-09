@@ -10,18 +10,20 @@ test('frontend contains all primary views and core check-in controls', () => {
   for (const id of ['view-checkin','view-history','view-analytics','view-settings','checkin-form','save-checkin']) {
     assert.match(html, new RegExp(`id=["']${id}["']`));
   }
-  for (const name of ['mood','anxiety','irritability','energy','focus','functioning','sleepQuality','appetite']) {
-    assert.match(html, new RegExp(`name=["']${name}["']`));
-  }
+  assert.match(html, /id=["']scale-inputs["']/);
 });
 
-test('frontend exposes fixed eight-scale trend toggles and dynamic tracked-item groups', () => {
-  for (const field of ['mood', 'anxiety', 'irritability', 'energy', 'focus', 'functioning', 'sleepQuality', 'appetite']) {
-    assert.match(html, new RegExp(`data-trend-field=["']${field}["']`));
-  }
+test('frontend exposes dynamic scale/trend containers and tracked-item groups', () => {
+  assert.match(html, /id=["']scale-definitions-settings["']/);
   assert.match(html, /id=["']trend-fields["']/);
+  assert.doesNotMatch(html, /name=["']mood["']/);
+  assert.doesNotMatch(html, /data-trend-field=["']mood["']/);
   assert.match(js, /trackedItems/);
   assert.match(js, /renderTrackedItems/);
+  assert.match(js, /scaleDefinitions/);
+  assert.match(js, /renderScaleInputs/);
+  assert.match(js, /renderScaleSettings/);
+  assert.match(js, /scaleSnapshot/);
   assert.match(js, /selectedTrendFields/);
   assert.doesNotMatch(js, /flagLabels/);
   assert.doesNotMatch(html, /value=["']caffeine["']/);
@@ -45,6 +47,16 @@ test('frontend exposes bounded history filters, treatment events, and completion
   assert.match(js, /treatmentMarkers/);
   assert.match(js, /scheduledFor/);
   assert.match(js, /observedAt/);
+});
+
+test('paired comparison wording is scale-specific rather than using a global denominator', () => {
+  assert.match(js, /вечер минус день/);
+  assert.match(js, /оба значения.*шкал/);
+  assert.doesNotMatch(js, /на \$\{data\.pairedDays\} парных днях/);
+});
+
+test('scheduled save does not send a draft scale snapshot to the backend', () => {
+  assert.doesNotMatch(js, /payload\.scaleSnapshot/);
 });
 
 test('frontend exposes backup restore and Replace-only JSON import controls', () => {

@@ -219,21 +219,21 @@ test('shortcuts invoke the hidden launcher rather than a UI executable', () => {
   assert.doesNotMatch(script, /MedCheckinTray\.exe/);
 });
 
-test('release-visible Windows labels track 2.3 without renaming stable scheduled tasks', () => {
+test('release-visible Windows labels track 2.4 without renaming stable scheduled tasks', () => {
   const script = readFileSync(join(root, 'windows/install.ps1'), 'utf8');
   const tray = readFileSync(join(root, 'windows/tray-host.ps1'), 'utf8');
   const uninstall = readFileSync(join(root, 'windows/uninstall.ps1'), 'utf8');
   const readme = readFileSync(join(root, 'README.txt'), 'utf8');
-  assert.match(script, /\$AppName = 'Med Check-in 2\.3\.0'/);
-  assert.match(script, /Med Check-in 2\.3\.0 installation diagnostics/);
-  assert.match(script, /\$shortcut\.Description = 'Med Check-in 2\.3'/);
-  assert.match(script, /'Med Check-in 2\.3\.lnk'/);
-  assert.match(readme, /«Med Check-in 2\.3»/);
-  for (const legacy of ['2.0', '2.1', '2.2']) assert.match(script, new RegExp(`'Med Check-in ${legacy.replace('.', '\\.')}\\.lnk'`));
+  assert.match(script, /\$AppName = 'Med Check-in 2\.4\.0'/);
+  assert.match(script, /Med Check-in 2\.4\.0 installation diagnostics/);
+  assert.match(script, /\$shortcut\.Description = 'Med Check-in 2\.4'/);
+  assert.match(script, /'Med Check-in 2\.4\.lnk'/);
+  assert.match(readme, /«Med Check-in 2\.4»/);
+  for (const legacy of ['2.0', '2.1', '2.2', '2.3']) assert.match(script, new RegExp(`'Med Check-in ${legacy.replace('.', '\\.')}\\.lnk'`));
   assert.match(script, /\$MainTaskName = 'Med Check-in 2\.0'/);
   assert.match(script, /\$WatchdogTaskName = 'Med Check-in 2\.0 Watchdog'/);
-  assert.match(tray, /NotifyIcon\.Text = 'Med Check-in 2\.3'/);
-  for (const version of ['2.0', '2.1', '2.2', '2.3']) {
+  assert.match(tray, /NotifyIcon\.Text = 'Med Check-in 2\.4'/);
+  for (const version of ['2.0', '2.1', '2.2', '2.3', '2.4']) {
     assert.match(uninstall, new RegExp(`'Med Check-in ${version.replace('.', '\\.')}\\.lnk'`));
   }
   assert.match(uninstall, /Med Check-in 2\.0/);
@@ -267,23 +267,23 @@ test('installer health check avoids culture-dependent runtime timestamp string r
   assert.match(script, /\(\[datetime\]\$runtime\.hostHeartbeatAt\)\.ToUniversalTime\(\)/);
 });
 
-test('release metadata and verifier target Med Check-in 2.3.0 without a personal static regimen', () => {
+test('release metadata and verifier target Med Check-in 2.4.0 without a personal static regimen', () => {
   const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
   const packageLock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
   const packageScript = readFileSync(join(root, 'scripts/package-windows.mjs'), 'utf8');
   const verifierScript = readFileSync(join(root, 'scripts/verify-release.mjs'), 'utf8');
   const ui = readFileSync(join(root, 'resources/index.html'), 'utf8');
-  assert.equal(packageJson.version, '2.3.0');
-  assert.equal(packageLock.version, '2.3.0');
-  assert.equal(packageLock.packages[''].version, '2.3.0');
+  assert.equal(packageJson.version, '2.4.0');
+  assert.equal(packageLock.version, '2.4.0');
+  assert.equal(packageLock.packages[''].version, '2.4.0');
   assert.match(packageJson.scripts['package:windows'], /package-windows\.mjs/);
-  assert.match(packageScript, /med-checkin-2\.3\.0-windows-installer\.zip/);
+  assert.match(packageScript, /med-checkin-2\.4\.0-windows-installer\.zip/);
   assert.match(packageScript, /VERSION\.txt/);
-  assert.match(packageScript, /2\.3\.0/);
+  assert.match(packageScript, /2\.4\.0/);
   assert.match(packageScript, /verify-release\.mjs/);
-  assert.match(verifierScript, /2\.3\.0/);
-  assert.match(ui, /<title>Med Check-in 2\.3\.0<\/title>/);
-  assert.match(ui, /<h1>Med Check-in <span>2\.3<\/span><\/h1>/);
+  assert.match(verifierScript, /2\.4\.0/);
+  assert.match(ui, /<title>Med Check-in 2\.4\.0<\/title>/);
+  assert.match(ui, /<h1>Med Check-in <span>2\.4<\/span><\/h1>/);
   assert.match(ui, /id="medication-label"[^>]*>Лечение не указано<\/p>/);
   assert.doesNotMatch(ui, /Эсциталопрам/);
   assert.doesNotMatch(ui, /Атомоксетин/);
@@ -303,6 +303,7 @@ test('package allowlist includes all runtime modules and excludes private test d
     'backend/backups.mjs',
     'backend/data-maintenance.mjs',
     'backend/migrations.mjs',
+    'backend/scales.mjs',
     'backend/treatment.mjs',
     'resources/draft-store.js',
     'resources/startup-runtime.js'

@@ -9,8 +9,8 @@ import { backupDatabase } from '../backend/backups.mjs';
 function checkin(mood) {
   return {
     localDate: '2026-07-31', slot: '13:00', recordedAt: '2026-07-31T06:00:00.000Z',
-    updatedAt: new Date().toISOString(), mood, anxiety: 1, irritability: 1,
-    energy: 6, focus: 6, functioning: 7, sleepQuality: 6, appetite: 5,
+    updatedAt: new Date().toISOString(), scales: { mood, anxiety: 1, irritability: 1,
+      energy: 6, focus: 6, functioning: 7, sleepQuality: 6, appetite: 5 },
     nightSleepHours: 8, daySleepHours: null, sleepStart: null, wakeTime: null,
     context: [], symptoms: [], activation: [], notes: '', redFlags: ''
   };
@@ -30,7 +30,7 @@ test('backupDatabase checkpoints and refreshes the current day snapshot', () => 
     backupDatabase({ repo, dbPath, backupDir, now: new Date('2026-07-31T22:30:00') });
 
     const snapshot = createRepository(target);
-    try { assert.equal(snapshot.getCheckin('2026-07-31', '13:00').mood, 9); }
+    try { assert.equal(snapshot.getCheckin('2026-07-31', '13:00').scales.mood, 9); }
     finally { snapshot.close(); }
   } finally {
     repo.close();

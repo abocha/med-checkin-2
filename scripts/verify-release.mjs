@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '2.3.0';
+const VERSION = '2.4.0';
 const ROOT_DIR = 'MedCheckin2';
 const REQUIRED_ENTRIES = [
   'INSTALL.bat',
@@ -140,7 +140,7 @@ export function verifyRelease(archivePath) {
     }
 
     const ui = readFileSync(join(packageRoot, 'resources/index.html'), 'utf8');
-    if (!ui.includes(`<title>Med Check-in ${VERSION}</title>`) || !ui.includes('<h1>Med Check-in <span>2.3</span></h1>')) {
+    if (!ui.includes(`<title>Med Check-in ${VERSION}</title>`) || !ui.includes('<h1>Med Check-in <span>2.4</span></h1>')) {
       throw new Error(`resources/index.html does not identify Med Check-in ${VERSION}`);
     }
 

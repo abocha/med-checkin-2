@@ -18,7 +18,10 @@
 - At least one scale must remain active.
 - New scheduled observations require exactly the current active scale IDs. Existing scheduled observations retain exactly their historical scale set; values may change but may not be removed.
 - Extra observations retain their looser meaningful-subset semantics. Existing Extras may retain/edit/remove historical archived values, but may add only currently active scales.
-- Browser drafts preserve their creation-time scale-ID snapshot across ordinary configuration changes. A scale ID unknown after destructive Replace must remain represented in draft state and block save rather than being silently filtered.
+- Browser drafts preserve their creation-time scale-ID snapshot across ordinary configuration changes. A
+  captured scheduled set that no longer matches the current active definitions, or contains a scale ID
+  unknown after destructive Replace, remains represented in local draft state and blocks save rather than
+  being silently filtered; discard/recreate is required.
 - Schema v3 is the only canonical post-migration representation. Do not keep permanent fixed-built-in columns alongside custom values.
 - Preserve direct upgrade paths from recognized schema v0, v1, and v2 to v3. Do not require an intermediate installed version.
 - Portable JSON remains `format: "med-checkin-2"`, explicit Replace-only, and advances to `formatVersion: 3`. v1 and v2 remain accepted.
@@ -183,8 +186,8 @@ It must use `normalizeScaleValues(input.scales, ...)`. The repository chooses th
 
 ```text
 create scheduled, ordinary  required = current active IDs; inactive allowed = none
-create scheduled, restored draft
-                            required = explicit draft scaleSnapshot; inactive allowed = snapshot
+create scheduled, captured draft
+                            required = current active IDs; a mismatched captured draft is preserved locally and blocked
 update scheduled            required = current stored IDs; inactive allowed = current stored IDs
 create Extra                required = none; inactive allowed = none
 update Extra                required = none; inactive allowed = current stored IDs
@@ -193,25 +196,10 @@ portable historical row     required = its submitted non-empty scheduled set; in
 
 For Extra meaningful-content validation, replace the fixed-field test with `Object.keys(normalized.scales).length > 0` plus the existing sleep/flags/notes/red-flag checks.
 
-### Restored scheduled draft payload
-
-The browser may include this field only for creation of a restored scheduled draft:
-
-```json
-{
-  "scaleSnapshot": ["mood", "energy", "custom:..."]
-}
-```
-
-Repository create logic validates:
-
-- it is a non-empty unique string array;
-- every ID still exists;
-- the snapshot set equals the submitted `scales` keys when the save is attempted;
-- known archived definitions in that snapshot are allowed;
-- this exception is not accepted as a way for ordinary new scheduled entries to choose an incomplete current set.
-
-Do not persist `scaleSnapshot` to SQLite or return it as check-in data.
+Captured scheduled drafts are local browser state only. They preserve their captured scale-ID set,
+but a set that no longer matches the current active definitions is blocked from saving until the
+draft is discarded and recreated under the current active scales. Do not send `scaleSnapshot` as a
+backend create exception, persist it to SQLite, or return it as check-in data.
 
 ### Schema v3
 
@@ -571,7 +559,9 @@ assert.throws(() => repo.updateCheckin(first.id, { ...first, scales: { ...first.
 assert.throws(() => repo.updateCheckin(first.id, { ...first, scales: without(first.scales, 'mood') }), /scale set|required/i);
 ```
 
-Add a restored-new-scheduled case using `scaleSnapshot` where one definition has since been archived; it succeeds only when every snapshot ID still exists and submitted keys equal the snapshot. Unknown snapshot ID fails.
+Do not add a repository case that bypasses current active scheduled requirements for a captured draft.
+Coverage for a captured draft whose IDs no longer match the active set belongs to the browser draft
+lifecycle tests, where it remains preserved locally and save is blocked until discard/recreate.
 
 - [ ] **Step 15: Run repository tests and confirm fixed-column SQL fails the new contract.**
 
@@ -617,12 +607,12 @@ const activeIds = activeScaleIds(definitions);
 ```
 
 - ordinary scheduled create: `requiredScaleIds = activeIds`;
-- restored scheduled create: validate explicit `input.scaleSnapshot`, then use it as `requiredScaleIds` and `allowedInactiveScaleIds`;
+- captured scheduled draft create: use the current active IDs; a mismatched local draft is blocked in the browser and never bypasses repository validation;
 - scheduled update: load current row first, use `Object.keys(current.scales)` for both required/allowed historical IDs;
 - Extra create: no required IDs and no inactive allowance;
 - Extra update: `allowedInactiveScaleIds = Object.keys(current.scales)`.
 
-Reject a `scaleSnapshot` on ordinary Extra creation. Ignore no unknown patch fields silently; preserve the repository's current validation style.
+Reject `scaleSnapshot` and other unknown patch fields rather than silently ignoring them; preserve the repository's current validation style.
 
 - [ ] **Step 18: Run repository/domain/scale tests to green.**
 
@@ -759,7 +749,7 @@ Reviewer brief must explicitly inspect:
 - `checkins_scheduled_identity` attachment after table rebuild;
 - FK/cascade behavior;
 - scheduled historical set invariants;
-- restored-draft snapshot exception not becoming a generic incomplete-scheduled bypass;
+- captured-draft preservation must not become a generic incomplete-scheduled bypass;
 - v1/v2 portable normalization only at the boundary;
 - v3 Replace validation-before-destruction and one-transaction semantics;
 - reminder/local-only state preservation.
@@ -814,7 +804,7 @@ and continue without committing.
 - Modify `test/draft-store.test.mjs` only if an actual generic-store regression appears; do not change it merely because draft payload fields changed.
 
 **Interfaces:**
-- Consumes from Task 1: `repo.listScaleDefinitions()`, scale-definition mutations, dynamic `checkin.scales`, restored scheduled `scaleSnapshot`, portable preview/export/Replace.
+- Consumes from Task 1: `repo.listScaleDefinitions()`, scale-definition mutations, dynamic `checkin.scales`, portable preview/export/Replace.
 - Produces: bootstrap `scaleDefinitions`; scale-definition HTTP routes; dynamic CSV; dynamic analytics maps; definition-driven form/history/settings/trend/chart UI; backward-compatible 2.3 browser-draft restoration.
 
 - [ ] **Step 1: Rewrite analytics tests for `scales` maps and add sparse/custom/archived cases.**
@@ -951,7 +941,7 @@ Extend `test/http-server.test.mjs`:
 5. `PUT /api/v1/scale-definitions/order` requires the complete active list;
 6. POST scheduled check-in accepts `scales` and rejects an incomplete ordinary active set;
 7. PUT existing scheduled rejects scale-set alteration;
-8. POST restored scheduled with valid `scaleSnapshot` can preserve a known archived ID; unknown snapshot ID is 400;
+8. Captured scheduled drafts with a mismatched or removed scale ID remain local and are blocked in the browser until discarded/recreated;
 9. Extra rules match Task 1;
 10. CSV header uses current scale labels and includes custom/archived columns only when represented in exported rows.
 
@@ -990,7 +980,7 @@ PUT  /api/v1/scale-definitions/:id
 
 Return the mutation result plus refreshed definitions in the same compact pattern used for tracked items. Call existing `onPersisted()` after meaningful mutations. There is no DELETE route and no archive/restore action route.
 
-Pass check-in JSON bodies through unchanged so Task 1 repository validation remains authoritative, including optional restored-draft `scaleSnapshot`.
+Pass check-in JSON bodies through unchanged so Task 1 repository validation remains authoritative; captured draft scale snapshots are local browser state and are not a backend save exception.
 
 - [ ] **Step 12: Make CSV export dynamic without turning it into an interchange schema.**
 
@@ -1049,7 +1039,7 @@ Refactor `test/frontend-draft-unknown.test.mjs` harness so dynamic inputs can be
 Add three explicit cases:
 
 1. **2.3 scheduled draft upgrade:** legacy draft values contain fixed scale fields plus `scalesChosen`; restore produces a snapshot of the eight built-in IDs and preserves chosen/unset values without injecting a new custom definition;
-2. **configuration change:** a new-format draft with `scaleSnapshot: ['mood','anxiety']` restores exactly those known IDs even if another scale is now active;
+2. **configuration change:** a new-format draft with a captured scale snapshot that no longer matches the active set restores locally but remains blocked from save until discarded/recreated under the current active scales;
 3. **Replace removed ID:** draft contains `custom:removed`; after bootstrap definitions no longer contain it, edits/persistence keep the unknown ID in the saved draft and `validForSave` remains false until explicit discard.
 
 Use the existing unknown tracked-flag test as the behavioral pattern; extend rather than invent a separate draft framework.
@@ -1126,7 +1116,7 @@ Update:
 - `formPayload`: return `scales` from chosen current inputs; never emit eight top-level scale properties;
 - `validForSave`: scheduled form requires every rendered snapshot scale to be chosen; Extra keeps existing meaningful-content rules; stale scale IDs block save.
 
-For an ordinary new scheduled entry, do not send `scaleSnapshot`: repository checks current active definitions. For a **restored unsaved scheduled draft**, send `scaleSnapshot = state.restoredDraftScaleSnapshot` with create POST. For editing a saved record, do not send it because repository owns the stored set.
+For an ordinary new scheduled entry and every captured scheduled draft, do not send `scaleSnapshot`: repository checks current active definitions. A captured draft whose snapshot no longer matches remains blocked until discard/recreate. For editing a saved record, do not send it because repository owns the stored set.
 
 - [ ] **Step 20: Preserve 2.3 and 2.4 draft shapes without modifying the generic draft store.**
 

@@ -24,11 +24,31 @@ async function fixture(options = {}) {
 const body = {
   kind: 'scheduled', period: 'day', localDate: '2026-07-31',
   scheduledFor: '2026-07-31T06:00:00.000Z', observedAt: '2026-07-31T06:05:00.000Z',
-  mood: 7, anxiety: 1,
-  irritability: 0, energy: 6, focus: 7, functioning: 8,
-  sleepQuality: 6, appetite: 5, nightSleepHours: 7, daySleepHours: 0,
+  scales: { mood: 7, anxiety: 1, irritability: 0, energy: 6, focus: 7, functioning: 8, sleepQuality: 6, appetite: 5 },
+  nightSleepHours: 7, daySleepHours: 0,
   context: ['caffeine'], symptoms: [], activation: [], notes: 'ok', redFlags: ''
 };
+
+test('API exposes dynamic scale definitions and accepts map-shaped scheduled check-ins', async () => {
+  const f = await fixture();
+  try {
+    let response = await api(f.base, '/api/v1/bootstrap');
+    const bootstrap = await response.json();
+    assert.equal(bootstrap.scaleDefinitions.length, 8);
+    response = await api(f.base, '/api/v1/scale-definitions', { method: 'POST', body: JSON.stringify({ label: 'Ясность, "утро"' }) });
+    assert.equal(response.status, 201);
+    const created = await response.json();
+    const custom = created.scaleDefinitions.find(item => item.label === 'Ясность, "утро"');
+    assert.ok(custom?.id.startsWith('custom:'));
+    const scales = Object.fromEntries(created.scaleDefinitions.filter(item => item.active).map((item, index) => [item.id, index]));
+    response = await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify({ kind: 'scheduled', period: 'day', localDate: '2026-08-10', scheduledFor: '2026-08-10T13:00:00.000Z', observedAt: '2026-08-10T13:00:00.000Z', scales, context: [], symptoms: [], activation: [], notes: '', redFlags: '' }) });
+    assert.equal(response.status, 201);
+    const saved = await response.json();
+    assert.equal(saved.scales[custom.id], scales[custom.id]);
+    response = await api(f.base, '/api/v1/export.csv');
+    assert.match((await response.text()).split('\n')[0], /"Ясность, ""утро"""/);
+  } finally { await f.close(); }
+});
 
 async function api(base, path, options = {}) {
   return fetch(base + path, {
@@ -54,14 +74,14 @@ test('API creates, edits, filters, reads, and deletes semantic observations', as
     const first = await response.json();
     assert.equal(first.recordedAt, '2026-08-07T01:02:03.000Z');
     assert.equal(first.updatedAt, first.recordedAt);
-    response = await api(f.base, `/api/v1/checkins/${first.id}`, { method: 'PUT', body: JSON.stringify({...body, mood: 9, recordedAt: 'client-owned', updatedAt: 'client-owned'}) });
+    response = await api(f.base, `/api/v1/checkins/${first.id}`, { method: 'PUT', body: JSON.stringify({...body, scales: { ...body.scales, mood: 9 }, recordedAt: 'client-owned', updatedAt: 'client-owned'}) });
     const updated = await response.json();
     assert.equal(updated.id, first.id);
-    assert.equal(updated.mood, 9);
+    assert.equal(updated.scales.mood, 9);
     assert.equal(updated.recordedAt, first.recordedAt);
     assert.equal(updated.updatedAt, '2026-08-07T01:05:00.000Z');
     response = await api(f.base, '/api/v1/checkin?date=2026-07-31&period=day');
-    assert.equal((await response.json()).mood, 9);
+    assert.equal((await response.json()).scales.mood, 9);
     response = await api(f.base, '/api/v1/checkins?limit=10&kind=scheduled&period=day');
     assert.equal((await response.json()).items.length, 1);
     response = await api(f.base, `/api/v1/checkins/${first.id}`, { method: 'DELETE' });
@@ -76,7 +96,7 @@ test('API exports, previews, and replaces only versioned portable data', async (
     let response = await api(f.base, '/api/v1/export.json');
     const exported = await response.json();
     assert.equal(exported.format, 'med-checkin-2');
-    assert.equal(exported.formatVersion, 2);
+    assert.equal(exported.formatVersion, 3);
     assert.equal(exported.observations.length, 1);
     assert.equal('remindersPausedUntil' in exported.settings, false);
 
@@ -133,11 +153,11 @@ test('API rejects duplicate scheduled identity, accepts partial Extras, and reje
     const duplicate = await response.json();
     assert.equal(duplicate.existing.period, 'day');
 
-    const extra = { kind: 'extra', period: null, localDate: '2026-07-31', observedAt: '2026-07-31T08:00:00.000Z', mood: 4 };
+    const extra = { kind: 'extra', period: null, localDate: '2026-07-31', observedAt: '2026-07-31T08:00:00.000Z', scales: { mood: 4 } };
     response = await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify(extra) });
     assert.equal(response.status, 201);
-    assert.equal((await response.json()).anxiety, null);
-    response = await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify({ ...extra, mood: null }) });
+    assert.equal((await response.json()).scales.mood, 4);
+    response = await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify({ ...extra, scales: {} }) });
     assert.equal(response.status, 400);
     response = await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify({ ...body, kind: undefined, period: undefined, observedAt: undefined, slot: '13:00' }) });
     assert.equal(response.status, 400);
@@ -320,7 +340,7 @@ test('browser UI requires a valid launch token and serves local assets', async (
     assert.match(response.headers.get('content-type'), /text\/html/);
     assert.match(response.headers.get('content-security-policy'), /default-src/);
     const html = await response.text();
-    assert.match(html, /Med Check-in 2\.3/);
+    assert.match(html, /Med Check-in 2\.4/);
     assert.doesNotMatch(html, /neutralino/i);
 
     response = await fetch(f.base + '/app/app.js');
@@ -419,7 +439,7 @@ test('analytics API excludes Extras and returns dated treatment markers', async 
   try {
     f.repo.createTreatmentEvent({ effectiveDate: '2026-07-07', regimen: [], note: 'analytics fixture' });
     await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify(body) });
-    await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify({ kind: 'extra', period: null, localDate: '2026-07-31', observedAt: '2026-07-31T08:00:00.000Z', mood: 1 }) });
+    await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify({ kind: 'extra', period: null, localDate: '2026-07-31', observedAt: '2026-07-31T08:00:00.000Z', scales: { mood: 1 } }) });
     const response = await api(f.base, '/api/v1/analytics');
     const analytics = await response.json();
     assert.equal(analytics.count, 1);
