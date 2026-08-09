@@ -35,10 +35,10 @@ test('API exposes dynamic scale definitions and accepts map-shaped scheduled che
     let response = await api(f.base, '/api/v1/bootstrap');
     const bootstrap = await response.json();
     assert.equal(bootstrap.scaleDefinitions.length, 8);
-    response = await api(f.base, '/api/v1/scale-definitions', { method: 'POST', body: JSON.stringify({ label: 'Ясность' }) });
+    response = await api(f.base, '/api/v1/scale-definitions', { method: 'POST', body: JSON.stringify({ label: 'Ясность, "утро"' }) });
     assert.equal(response.status, 201);
     const created = await response.json();
-    const custom = created.scaleDefinitions.find(item => item.label === 'Ясность');
+    const custom = created.scaleDefinitions.find(item => item.label === 'Ясность, "утро"');
     assert.ok(custom?.id.startsWith('custom:'));
     const scales = Object.fromEntries(created.scaleDefinitions.filter(item => item.active).map((item, index) => [item.id, index]));
     response = await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify({ kind: 'scheduled', period: 'day', localDate: '2026-08-10', scheduledFor: '2026-08-10T13:00:00.000Z', observedAt: '2026-08-10T13:00:00.000Z', scales, context: [], symptoms: [], activation: [], notes: '', redFlags: '' }) });
@@ -46,7 +46,7 @@ test('API exposes dynamic scale definitions and accepts map-shaped scheduled che
     const saved = await response.json();
     assert.equal(saved.scales[custom.id], scales[custom.id]);
     response = await api(f.base, '/api/v1/export.csv');
-    assert.match((await response.text()).split('\n')[0], /Ясность/);
+    assert.match((await response.text()).split('\n')[0], /"Ясность, ""утро"""/);
   } finally { await f.close(); }
 });
 

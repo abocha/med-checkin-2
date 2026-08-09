@@ -63,6 +63,17 @@ test('2.3 fixed-field draft normalizes to the eight-ID snapshot without later de
   assert.deepEqual(Object.fromEntries(Object.entries(normalized.scales)), { mood: 6 });
 });
 
+test('2.3 fixed-field draft preserves an explicitly empty chosen scale set', () => {
+  const harness = createHarness(builtins.map(([id, label], sortOrder) => ({ id, label, active: true, sortOrder })));
+  const values = Object.fromEntries(builtins.map(([id], index) => [id, String(index + 1)]));
+  values.scalesChosen = Object.fromEntries(builtins.map(([id]) => [id, false]));
+
+  harness.lifecycle.restoreDraft({ values });
+
+  assert.deepEqual(harness.scaleInputs().map(input => input.name), builtins.map(([id]) => id));
+  assert.deepEqual(harness.scaleInputs().map(input => input.dataset.chosen), Array(8).fill(undefined));
+});
+
 test('new-format draft restores exactly its captured known IDs after later activation', () => {
   const harness = createHarness([
     { id: 'mood', label: 'Настроение', active: true, sortOrder: 0 },

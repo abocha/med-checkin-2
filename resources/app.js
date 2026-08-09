@@ -425,8 +425,9 @@ function normalizeDraftScaleState(values = {}) {
   const legacyIds = ['mood','anxiety','irritability','energy','focus','functioning','sleepQuality','appetite'];
   const snapshot = Array.isArray(values.scaleSnapshot) && values.scaleSnapshot.length ? [...new Set(values.scaleSnapshot)] : (values.scales && typeof values.scales === 'object' ? Object.keys(values.scales) : legacyIds);
   const scales = values.scales && typeof values.scales === 'object' ? { ...values.scales } : Object.fromEntries(legacyIds.filter(id => values[id] !== undefined && values[id] !== '').map(id => [id, Number(values[id])]));
+  const hasChosenState = values.scalesChosen !== null && typeof values.scalesChosen === 'object' && !Array.isArray(values.scalesChosen);
   const chosenIds = Object.keys(values.scalesChosen || {}).filter(id => values.scalesChosen[id] && Object.hasOwn(scales, id));
-  return { scaleSnapshot: snapshot, scales, chosenIds: chosenIds.length ? chosenIds : Object.keys(scales) };
+  return { scaleSnapshot: snapshot, scales, chosenIds: hasChosenState ? chosenIds : Object.keys(scales) };
 }
 
 function chooseDialog(id, fallback) {
