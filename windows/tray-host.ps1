@@ -287,8 +287,8 @@ function Poll-Backend {
   try {
     if (-not (Load-Runtime)) { return }
     $response = Invoke-Api -Method 'GET' -Path '/api/v1/host/poll'
-    Invoke-Api -Method 'POST' -Path '/api/v1/control/heartbeat' -Body @{} | Out-Null
     Handle-Poll $response
+    Invoke-Api -Method 'POST' -Path '/api/v1/control/heartbeat' -Body @{} | Out-Null
   } catch {
     $now = [datetime]::UtcNow
     if (($now - $script:LastPollErrorAt).TotalSeconds -ge 60) {
