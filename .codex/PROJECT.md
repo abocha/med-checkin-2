@@ -34,7 +34,7 @@ Use the smallest route that answers the task.
 - Supported commands and package version: `package.json`.
 - Canonical CI sequence and Node version: `.github/workflows/windows-ci.yml`.
 - Release contents and archive verification: `scripts/package-windows.mjs`, `scripts/verify-release.mjs`, and `test/package-layout.test.mjs`.
-- Persistent-data contracts: `backend/domain.mjs`, `backend/tracked-items.mjs`, `backend/schema.mjs`, `backend/migrations.mjs`, `backend/repository.mjs`, `backend/treatment.mjs`, plus their corresponding tests.
+- Persistent-data contracts: `backend/domain.mjs`, `backend/tracked-items.mjs`, `backend/scales.mjs`, `backend/schema.mjs`, `backend/migrations.mjs`, `backend/repository.mjs`, `backend/treatment.mjs`, plus their corresponding tests.
 - Backup, restore, and portable Replace import: `backend/backups.mjs`, `backend/data-maintenance.mjs`, `test/backups.test.mjs`, `test/backup-smoke.test.mjs`, `test/data-maintenance.test.mjs`.
 - Local HTTP/runtime behavior: `backend/main.mjs`, `backend/http-server.mjs`, `backend/reminders.mjs`, `backend/host-actions.mjs`, `backend/supervisor.mjs`, `backend/process-safety.mjs`, plus corresponding tests.
 - Updater behavior: `backend/updates.mjs`, updater routes in `backend/http-server.mjs`, tray handoff in `windows/tray-host.ps1`, installer behavior in `windows/install.ps1`, and updater/package tests.
@@ -107,8 +107,9 @@ These are current behavior, not permission to redesign them silently.
 
 - Scheduled observations are semantic `day` and `evening` entries; Extra observations use
   `kind = "extra"` and `period = null`.
-- Scheduled observations require all eight primary scales. Extra observations may contain a meaningful
-  subset but may not be empty.
+- Scale definitions have stable IDs and configurable labels/active order; at least one is active.
+- New scheduled observations require the current active scale set; saved scheduled observations retain
+  their historical scale set. Extra observations may contain a meaningful subset but may not be empty.
 - Tracked context/symptom/activation definitions are persisted with stable IDs. Definitions may be
   renamed or archived; existing observations keep their stored IDs, and archived definitions remain
   meaningful when historical observations are edited.
@@ -118,11 +119,14 @@ These are current behavior, not permission to redesign them silently.
 - Fresh databases contain no personal treatment history by default.
 - SQLite schema compatibility is migration-controlled; backup/restore validation must reject incomplete
   or newer incompatible schemas before replacing live data.
+- Scale values are stored relationally in SQLite schema v3; archiving affects new entries, not historical identity.
 - Portable JSON uses the `med-checkin-2` versioned format and explicit Replace import only. Current
-  format v2 carries tracked-item definitions; v1 remains accepted for compatibility. There is no Merge import.
+  format v3 carries scale and tracked-item definitions; v1/v2 remain accepted for compatibility. There is no Merge import.
 - Restore and Replace import create recoverable pre-operation SQLite backups before destructive replacement.
 - Reminder transient state remains local and is not replaced by portable import.
-- Browser drafts are local state and must survive ordinary application upgrades.
+- Browser drafts are local state and must survive ordinary application upgrades. They preserve their
+  captured scale-ID set; if a captured ID is unknown after Replace, the draft remains local but blocks
+  saving until it is discarded and recreated under the current active scales.
 - Update discovery is fixed to the official GitHub repository. Installation is explicit, verifies the
   published SHA-256 before extraction/launch, and preserves `%LOCALAPPDATA%\MedCheckin2`.
 - Updater checks and installation staging are mutually exclusive. While installation is in flight, a
@@ -143,14 +147,16 @@ Likely files:
 
 - `backend/domain.mjs`
 - `backend/tracked-items.mjs`
+- `backend/scales.mjs`
 - `backend/schema.mjs`
 - `backend/migrations.mjs`
 - `backend/repository.mjs`
 - `backend/treatment.mjs`
 - corresponding `test/*.test.mjs`
 
-Important contracts: semantic Day/Evening/Extra identity, tracked-item stable IDs and archive behavior,
-validation rules, SQLite schema, migrations, timestamps, treatment snapshots, and repository writes.
+Important contracts: semantic Day/Evening/Extra identity, tracked-item and scale-definition stable IDs and
+archive behavior, checkin_scale_values integrity, validation rules, SQLite schema, migrations, timestamps,
+treatment snapshots, and repository writes.
 
 ### Backup, restore, and portable data lifecycle
 
@@ -225,7 +231,8 @@ Use narrow `sol_reviewer` review when the actual diff touches a concrete high-co
 not merely because these files exist.
 
 - SQLite schema changes, migrations, repository write semantics, identity/timestamp preservation,
-  treatment persistence, tracked-item definition persistence, or compatibility rules.
+  treatment persistence, tracked-item/scale-definition persistence, checkin_scale_values integrity,
+  or compatibility rules.
 - Backup validation, restore, portable Replace import, rollback, WAL/SHM handling, or any operation
   capable of replacing the live database.
 - Recursive deletion, installer/uninstaller cleanup, path-containment logic, or anything that could

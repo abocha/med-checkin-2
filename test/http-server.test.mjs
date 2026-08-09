@@ -340,7 +340,7 @@ test('browser UI requires a valid launch token and serves local assets', async (
     assert.match(response.headers.get('content-type'), /text\/html/);
     assert.match(response.headers.get('content-security-policy'), /default-src/);
     const html = await response.text();
-    assert.match(html, /Med Check-in 2\.3/);
+    assert.match(html, /Med Check-in 2\.4/);
     assert.doesNotMatch(html, /neutralino/i);
 
     response = await fetch(f.base + '/app/app.js');

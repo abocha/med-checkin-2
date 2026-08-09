@@ -81,3 +81,30 @@ test('restore validates before replacement and creates a recoverable v3 backup',
     assert.equal(existsSync(result.preRestoreBackupPath), true); const restored = createRepository(dbPath); try { assert.equal(restored.getCheckinById(row.id).scales.mood, 5); } finally { restored.close(); }
   } finally { try { repo.close(); } catch {} rmSync(root, { recursive: true, force: true }); }
 });
+
+test('failed restore preparation recovers the pre-restore database and retries preparation', () => {
+  const root = mkdtempSync(join(tmpdir(), 'med-checkin-restore-rollback-')); const dbPath = join(root, 'med-checkin.sqlite'); const backupDir = join(root, 'backups'); const repo = createRepository(dbPath);
+  try {
+    const scales = Object.fromEntries(repo.listScaleDefinitions().map((item) => [item.id, 5]));
+    const saved = repo.createCheckin({ kind: 'scheduled', period: 'day', localDate: '2026-08-01', observedAt: '2026-08-01T06:05:00.000Z', scales });
+    const source = createManualBackup({ repo, dbPath, backupDir, now: new Date('2026-08-07T01:00:00.000Z') });
+    repo.updateCheckin(saved.id, { ...saved, scales: { ...saved.scales, mood: 9 } });
+    let calls = 0;
+    const syntheticFailure = ({ dbPath: preparedPath, backupDir: preparedBackups, now }) => {
+      calls += 1;
+      if (calls === 1) throw new Error('synthetic migration failure');
+      return prepareDatabase({ dbPath: preparedPath, backupDir: preparedBackups, now });
+    };
+    let failure;
+    try {
+      restoreDatabase({ repo, dbPath, backupDir, backupName: source.split(/[\\/]/).at(-1), now: new Date('2026-08-07T01:02:03.000Z'), prepareDatabase: syntheticFailure });
+    } catch (error) { failure = error; }
+    assert.match(failure?.message ?? '', /synthetic migration failure/);
+    assert.equal(failure?.repositoryClosed, true);
+    assert.equal(existsSync(failure?.preRestoreBackupPath), true);
+    assert.equal(calls, 2);
+    const recovered = createRepository(dbPath);
+    try { assert.equal(recovered.getCheckinById(saved.id).scales.mood, 9); }
+    finally { recovered.close(); }
+  } finally { try { repo.close(); } catch {} rmSync(root, { recursive: true, force: true }); }
+});

@@ -199,7 +199,7 @@ An Extra observation may contain any subset of currently active scales plus the 
 
 The existing Extra "must contain meaningful content" rule remains; an Extra may therefore contain no scale values when another meaningful field is present, but the complete observation may not be empty. Dynamic scales participate in that check instead of the fixed eight properties.
 
-### Draft exception
+### Draft preservation and mismatch blocking
 
 Browser drafts are unsaved historical work and already have a preservation contract across upgrades. A draft stores the scale IDs that were present when it was created.
 
@@ -208,9 +208,10 @@ When restoring a draft:
 - existing values are preserved;
 - known archived definitions referenced by the draft remain shown;
 - scales created/activated later are not retroactively injected;
-- a draft scale ID that is no longer known after a destructive Replace import is preserved in draft state and blocks save rather than disappearing silently.
+- a draft scale ID that is no longer known after a destructive Replace import is preserved in local draft state and blocks save rather than disappearing silently;
+- a captured scheduled draft whose scale set no longer matches the current active set is preserved locally but blocks save until it is discarded and recreated under the current active scales.
 
-To support this without server-side draft storage or definition-version history, the restored-draft save path may submit its explicit non-empty scale-ID snapshot. The backend must validate that the snapshot exactly matches the submitted scale-value keys and that every ID still exists. This is a narrow compatibility exception for browser draft recovery, not a general API for choosing an incomplete scheduled scale set.
+Restored scheduled drafts do not bypass ordinary scheduled-entry validation and do not submit a scale-set exception to the backend. No server-side draft storage or definition-version history is needed for this preservation-and-blocking behavior.
 
 Do not introduce definition revisions, audit history, server-side drafts, or a reconciliation subsystem for this edge case.
 
@@ -282,7 +283,7 @@ The rendered scale set depends on context:
 
 - ordinary new scheduled form -> current active definitions;
 - existing record -> that record's stored scale IDs, using current labels and showing archived status when applicable;
-- restored draft -> the draft's stored scale IDs;
+- restored draft -> the draft's stored scale IDs when they match the current active set; otherwise preserve the draft locally and show a blocked-save state;
 - Extra -> current active definitions plus historically present archived definitions when editing an existing record.
 
 The existing "use previous values" behavior should copy values only where the target form contains the same scale ID. It must not fabricate values for newly created scales.

@@ -45,6 +45,15 @@ function clearScaleValue(event) {
   setScale(input, null);
   markDirty();
 }
+function renderedScaleState() {
+  const form = $('#checkin-form');
+  const ids = currentRenderedScaleIds();
+  return {
+    ids,
+    values: Object.fromEntries(ids.map(id => [id, form?.elements?.[id]?.value])),
+    chosenIds: ids.filter(id => form?.elements?.[id]?.dataset?.chosen === 'true')
+  };
+}
 function renderScaleInputs(ids = activeScaleDefinitions().map(definition => definition.id), { values = {}, chosenIds = null } = {}) {
   const container = $('#scale-inputs');
   const definitions = orderedDefinitionsForIds(ids);
@@ -61,7 +70,26 @@ function renderScaleInputs(ids = activeScaleDefinitions().map(definition => defi
   }
   setRanges();
 }
-function applyScaleDefinitions(items) { state.scaleDefinitions = Array.isArray(items) ? items.map(item => ({ ...item })) : []; renderScaleSettings(); }
+function applyScaleDefinitions(items) {
+  state.scaleDefinitions = Array.isArray(items) ? items.map(item => ({ ...item })) : [];
+  renderScaleSettings();
+  const existing = renderedScaleState();
+  const preservedScheduled = state.currentKind === 'scheduled' && (state.currentRecord?.id || state.restoredDraftScaleSnapshot);
+  if (preservedScheduled) {
+    const ids = existing.ids.length ? existing.ids : (state.currentRecord?.scales ? Object.keys(state.currentRecord.scales) : state.restoredDraftScaleSnapshot);
+    const fallbackValues = state.currentRecord?.scales || {};
+    const values = existing.ids.length ? existing.values : fallbackValues;
+    const chosenIds = existing.ids.length ? existing.chosenIds : Object.keys(fallbackValues);
+    renderScaleInputs(ids, { values, chosenIds });
+  }
+  const pristineNewScheduled = state.currentKind === 'scheduled' && !state.currentRecord?.id && !state.dirty && !state.restoredDraftScaleSnapshot;
+  if (pristineNewScheduled) {
+    renderScaleInputs(activeScaleDefinitions().map(definition => definition.id));
+  } else if (state.currentKind === 'scheduled' && !state.currentRecord?.id && (state.dirty || state.restoredDraftScaleSnapshot)) {
+    $('#save-status').textContent = 'Настройки шкал изменились; текущий черновик сохранён без изменений.';
+    toast('Настройки шкал изменились. Текущая запись сохранена без изменений.');
+  }
+}
 
 function toast(message) {
   const element = $('#toast');
@@ -133,7 +161,7 @@ function buildDraftFlagValues(values = {}, staleFlags = []) {
 }
 
 if (globalThis.__MED_CHECKIN_TEST__) {
-  globalThis.__MED_CHECKIN_TEST__.draftLifecycle = { state, restoreDraft, persistDraft, validForSave, discardDraft, markDirty, normalizeDraftScaleState, findStaleDraftScaleIds, renderScaleInputs };
+  globalThis.__MED_CHECKIN_TEST__.draftLifecycle = { state, restoreDraft, persistDraft, validForSave, discardDraft, markDirty, normalizeDraftScaleState, findStaleDraftScaleIds, renderScaleInputs, applyScaleDefinitions };
 }
 
 function renderTrackedItems(selected = currentFlagSelections()) {

@@ -4,12 +4,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-const VERSION = '2.3.0';
+const VERSION = '2.4.0';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const dist = join(root, 'dist');
 const stage = join(dist, 'package-stage');
 const packageRoot = join(stage, 'MedCheckin2');
-const archiveName = 'med-checkin-2.3.0-windows-installer.zip';
+const archiveName = 'med-checkin-2.4.0-windows-installer.zip';
 const archive = join(dist, archiveName);
 const checksumFile = `${archive}.sha256`;
 
