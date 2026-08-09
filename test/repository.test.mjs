@@ -64,3 +64,26 @@ test('repository filters history and persists semantic reminder state', () => {
     assert.equal(repo.getReminderStates('2026-07-31').day.snoozedUntil, '2026-07-31T07:00:00.000Z');
   } finally { repo.close(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('repository keeps tracked IDs stable across rename, archive, and complete reorder', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'med-checkin-tracked-items-'));
+  const repo = createRepository(join(dir, 'test.sqlite'));
+  try {
+    const custom = repo.createTrackedItem({ category: 'symptoms', label: '  New symptom  ' });
+    assert.match(custom.id, /^custom:/);
+    assert.deepEqual(custom, {
+      id: custom.id, category: 'symptoms', label: 'New symptom', active: true, sortOrder: 8
+    });
+    const saved = repo.createCheckin(sample({ symptoms: [custom.id] }), new Date('2026-07-31T06:10:00.000Z'));
+    const changed = repo.updateTrackedItem(custom.id, { label: 'Renamed symptom', active: false });
+    assert.equal(changed.label, 'Renamed symptom');
+    assert.equal(changed.active, false);
+    assert.deepEqual(repo.getCheckinById(saved.id).symptoms, [custom.id]);
+    assert.throws(() => repo.updateTrackedItem(custom.id, { category: 'context' }), /tracked item|patch|category/i);
+    const ids = repo.listTrackedItems().filter((item) => item.category === 'symptoms').map((item) => item.id);
+    const reordered = repo.reorderTrackedItems('symptoms', [...ids].reverse());
+    assert.deepEqual(reordered.map((item) => item.sortOrder), Array.from({ length: ids.length }, (_, index) => index));
+    assert.equal(repo.deleteTrackedItem, undefined);
+    assert.throws(() => repo.reorderTrackedItems('symptoms', ids.slice(1)), /complete|category|ids/i);
+  } finally { repo.close(); rmSync(dir, { recursive: true, force: true }); }
+});

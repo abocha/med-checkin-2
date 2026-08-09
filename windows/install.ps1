@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$AppName = 'Med Check-in 2.2.2'
+$AppName = 'Med Check-in 2.3.0'
 $MainTaskName = 'Med Check-in 2.0'
 $WatchdogTaskName = 'Med Check-in 2.0 Watchdog'
 $NodeVersion = '22.23.1'
@@ -73,26 +73,50 @@ function Assert-TrayScript([string]$Path) {
   }
 }
 
+function Test-ExactNodeRuntime([string]$NodeDirectory) {
+  $nodeExe = Join-Path $NodeDirectory 'node.exe'
+  if (-not (Test-Path -LiteralPath $nodeExe -PathType Leaf)) { return $false }
+  try {
+    $version = (& $nodeExe --version 2>$null | Out-String).Trim()
+    return $LASTEXITCODE -eq 0 -and $version -ceq ('v' + $NodeVersion)
+  } catch { return $false }
+}
+
+function Copy-VerifiedNodeRuntime([string]$Destination) {
+  $existingRuntime = Join-Path $InstallDir 'runtime\node'
+  if (-not (Test-ExactNodeRuntime $existingRuntime)) { return $false }
+  try {
+    New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+    Copy-Item (Join-Path $existingRuntime '*') $Destination -Recurse -Force
+    return Test-ExactNodeRuntime $Destination
+  } catch {
+    Remove-Item -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue
+    return $false
+  }
+}
+
 function Prepare-Application {
   New-Item -ItemType Directory -Force -Path $PreparedAppDir | Out-Null
   Copy-ReleaseFiles $PreparedAppDir
 
-  $nodeArchivePath = Join-Path $TempDir $NodeArchive
-  Download-File $NodeUrl $nodeArchivePath
-  Assert-Sha256 $nodeArchivePath $NodeSha256
-  $nodeExtractDir = Join-Path $TempDir 'node-extracted'
-  Expand-Archive -Path $nodeArchivePath -DestinationPath $nodeExtractDir -Force
-  $expandedNode = Get-ChildItem $nodeExtractDir -Directory | Select-Object -First 1
-  if (-not $expandedNode -or -not (Test-Path (Join-Path $expandedNode.FullName 'node.exe'))) {
-    throw 'Could not find node.exe in the official Node.js archive.'
-  }
   $nodeTarget = Join-Path $PreparedAppDir 'runtime\node'
-  New-Item -ItemType Directory -Force -Path $nodeTarget | Out-Null
-  Copy-Item (Join-Path $expandedNode.FullName '*') $nodeTarget -Recurse -Force
+  if (-not (Copy-VerifiedNodeRuntime $nodeTarget)) {
+    $nodeArchivePath = Join-Path $TempDir $NodeArchive
+    Download-File $NodeUrl $nodeArchivePath
+    Assert-Sha256 $nodeArchivePath $NodeSha256
+    $nodeExtractDir = Join-Path $TempDir 'node-extracted'
+    Expand-Archive -Path $nodeArchivePath -DestinationPath $nodeExtractDir -Force
+    $expandedNode = Get-ChildItem $nodeExtractDir -Directory | Select-Object -First 1
+    if (-not $expandedNode -or -not (Test-Path (Join-Path $expandedNode.FullName 'node.exe'))) {
+      throw 'Could not find node.exe in the official Node.js archive.'
+    }
+    New-Item -ItemType Directory -Force -Path $nodeTarget | Out-Null
+    Copy-Item (Join-Path $expandedNode.FullName '*') $nodeTarget -Recurse -Force
+  }
 
   Assert-TrayScript $PreparedTrayScript
-  if (-not (Test-Path (Join-Path $PreparedAppDir 'runtime\node\node.exe'))) {
-    throw 'Prepared application does not contain node.exe.'
+  if (-not (Test-ExactNodeRuntime $nodeTarget)) {
+    throw 'Prepared application does not contain the required Node.js runtime.'
   }
 }
 
@@ -222,7 +246,7 @@ function Write-InstallDiagnostics([string]$Reason) {
   try {
     New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
     $lines = New-Object 'System.Collections.Generic.List[string]'
-    $lines.Add('Med Check-in 2.2.2 installation diagnostics')
+    $lines.Add('Med Check-in 2.3.0 installation diagnostics')
     $lines.Add('Generated: ' + [datetime]::UtcNow.ToString('o'))
     $lines.Add('Reason: ' + $Reason)
     $lines.Add('')
@@ -388,19 +412,19 @@ function Save-Shortcut([string]$ShortcutPath) {
   $shortcut.WorkingDirectory = $InstallDir
   $iconPath = Join-Path $InstallDir 'resources\icons\app.ico'
   $shortcut.IconLocation = $iconPath + ',0'
-  $shortcut.Description = 'Open Med Check-in 2.2'
+  $shortcut.Description = 'Med Check-in 2.3'
   $shortcut.Save()
 }
 
 function Create-Shortcuts {
   $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
   $desktop = [Environment]::GetFolderPath('Desktop')
-  foreach ($name in @('Med Check-in 2.0.lnk', 'Med Check-in 2.1.lnk', 'Med Check-in 2.2.lnk')) {
+  foreach ($name in @('Med Check-in 2.0.lnk', 'Med Check-in 2.1.lnk', 'Med Check-in 2.2.lnk', 'Med Check-in 2.3.lnk')) {
     Remove-Item (Join-Path $startMenu $name) -Force -ErrorAction SilentlyContinue
     Remove-Item (Join-Path $desktop $name) -Force -ErrorAction SilentlyContinue
   }
-  Save-Shortcut (Join-Path $startMenu 'Med Check-in 2.2.lnk')
-  Save-Shortcut (Join-Path $desktop 'Med Check-in 2.2.lnk')
+  Save-Shortcut (Join-Path $startMenu 'Med Check-in 2.3.lnk')
+  Save-Shortcut (Join-Path $desktop 'Med Check-in 2.3.lnk')
 }
 
 try {

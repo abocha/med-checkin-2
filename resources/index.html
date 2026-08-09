@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Med Check-in 2.2.2</title>
+  <title>Med Check-in 2.3.0</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -12,12 +12,13 @@
     <header class="app-header">
       <div>
         <p class="eyebrow">личный журнал состояния</p>
-        <h1>Med Check-in <span>2.2</span></h1>
+        <h1>Med Check-in <span>2.3</span></h1>
         <p id="medication-label" class="medication-label">Лечение не указано</p>
       </div>
       <div class="header-status">
         <span id="connection-dot" class="status-dot" aria-hidden="true"></span>
         <span id="connection-label">Подключение…</span>
+        <button type="button" class="update-indicator hidden" id="update-available">Доступно обновление</button>
       </div>
     </header>
 
@@ -102,38 +103,18 @@
           <details class="card">
             <summary><span><strong>Контекст дня</strong><small>Что могло повлиять на показатели</small></span></summary>
             <div class="details-body check-grid" data-flag-group="context">
-              <label><input type="checkbox" value="caffeine"> Кофеин</label>
-              <label><input type="checkbox" value="stress"> Выраженный стресс</label>
-              <label><input type="checkbox" value="conflict"> Конфликт</label>
-              <label><input type="checkbox" value="illnessPain"> Болезнь или боль</label>
-              <label><input type="checkbox" value="physicalActivity"> Физическая активность</label>
-              <label><input type="checkbox" value="positiveProductiveDay"> Необычно приятный или продуктивный день</label>
             </div>
           </details>
 
           <details class="card">
             <summary><span><strong>Телесные и побочные симптомы</strong><small>Отмечай только то, что действительно заметил</small></span></summary>
             <div class="details-body check-grid" data-flag-group="symptoms">
-              <label><input type="checkbox" value="dizziness"> Головокружение</label>
-              <label><input type="checkbox" value="headache"> Головная боль</label>
-              <label><input type="checkbox" value="nausea"> Тошнота или дискомфорт в животе</label>
-              <label><input type="checkbox" value="sweating"> Потливость</label>
-              <label><input type="checkbox" value="palpitations"> Сердцебиение</label>
-              <label><input type="checkbox" value="brainZaps"> Brain zaps / разряды</label>
-              <label><input type="checkbox" value="unusualDreams"> Необычные сны</label>
-              <label><input type="checkbox" value="crying"> Плаксивость</label>
             </div>
           </details>
 
           <details class="card activation-card">
             <summary><span><strong>Необычная активация</strong><small>Контекст для врача, не самодиагностика</small></span></summary>
             <div class="details-body check-grid" data-flag-group="activation">
-              <label><input type="checkbox" value="reducedSleepNeed"> Меньше потребности во сне</label>
-              <label><input type="checkbox" value="racingThoughts"> Ускорение мыслей</label>
-              <label><input type="checkbox" value="talkativeness"> Необычная разговорчивость</label>
-              <label><input type="checkbox" value="innerMotor"> «Внутренний мотор»</label>
-              <label><input type="checkbox" value="impulsivity"> Непривычная импульсивность</label>
-              <label><input type="checkbox" value="elevatedAgitated"> Необычно приподнятое или возбуждённое состояние</label>
             </div>
           </details>
 
@@ -167,7 +148,16 @@
         <div class="view-heading"><div><p class="eyebrow">описательная аналитика</p><h2>Что меняется со временем</h2><p class="muted">Графики показывают рисунок данных, но не доказывают причину изменений.</p></div><button type="button" class="secondary" id="refresh-analytics">Пересчитать</button></div>
         <div id="analytics-kpis" class="kpi-grid"></div>
         <section id="completion-stats" class="card"></section>
-        <section class="card chart-card"><div class="section-heading"><div><h3>Основные показатели</h3><p>Ежедневные средние и трёхдневное сглаживание.</p></div></div><div id="trend-chart" class="chart"></div></section>
+        <section class="card chart-card"><div class="section-heading"><div><h3>Основные показатели</h3><p>Ежедневные средние и трёхдневное сглаживание.</p></div></div><div id="trend-fields" class="trend-fields" role="group" aria-label="Показатели графика">
+          <label><input type="checkbox" data-trend-field="mood" checked> Настроение</label>
+          <label><input type="checkbox" data-trend-field="anxiety"> Тревога</label>
+          <label><input type="checkbox" data-trend-field="irritability"> Раздражительность</label>
+          <label><input type="checkbox" data-trend-field="energy" checked> Энергия</label>
+          <label><input type="checkbox" data-trend-field="focus" checked> Концентрация</label>
+          <label><input type="checkbox" data-trend-field="functioning" checked> Функционирование</label>
+          <label><input type="checkbox" data-trend-field="sleepQuality"> Качество сна</label>
+          <label><input type="checkbox" data-trend-field="appetite"> Аппетит</label>
+        </div><div id="trend-chart" class="chart"></div></section>
         <div class="two-column">
           <section class="card"><h3>Днём и вечером</h3><div id="paired-comparison"></div></section>
           <section class="card"><h3>Частые отметки</h3><div id="frequency-chart"></div></section>
@@ -198,6 +188,11 @@
           </form>
           <div id="treatment-events" class="treatment-events"></div>
         </section>
+        <section class="card tracked-items-card">
+          <div class="section-heading"><div><h3>Отслеживаемые отметки</h3><p>Переименуй, архивируй или верни отметки. Старые записи сохраняют выбранные значения.</p></div></div>
+          <div id="tracked-items-settings" class="tracked-items-settings"></div>
+        </section>
+        <section class="card update-card"><div class="section-heading"><div><h3>О приложении и обновления</h3><p id="update-status" class="muted">Проверка обновлений ещё не выполнялась.</p></div><span id="installed-version" class="pill"></span></div><p id="update-notes" class="update-notes muted" hidden></p><div class="button-row"><button type="button" class="secondary" id="check-updates">Проверить обновления</button><button type="button" class="primary" id="install-update" hidden>Обновить</button></div></section>
         <section class="card maintenance-card">
           <h3>Экспорт и резервные копии</h3>
           <p class="muted">CSV удобно анализировать, а переносимый JSON можно проверить и затем использовать для полной замены данных.</p>
@@ -216,7 +211,7 @@
             </div>
           </div>
         </section>
-        <section class="card privacy-card"><h3>Приватность</h3><p>Данные остаются на этом компьютере. Приложение не создаёт аккаунт, не отправляет телеметрию и не обращается в интернет.</p></section>
+        <section class="card privacy-card"><h3>Приватность</h3><p>Данные остаются на этом компьютере. Приложение не создаёт аккаунт и не отправляет телеметрию или медицинские данные. Оно может обращаться только к официальному GitHub-репозиторию для проверки и загрузки явно выбранного обновления.</p></section>
       </section>
     </main>
 

@@ -1,6 +1,8 @@
 import { DatabaseSync } from 'node:sqlite';
+import { randomUUID } from 'node:crypto';
 import { DEFAULT_SETTINGS, normalizeCheckin } from './domain.mjs';
 import { createLatestSchema, LATEST_SCHEMA_VERSION } from './schema.mjs';
+import { normalizeTrackedItem, TRACKED_ITEM_CATEGORIES } from './tracked-items.mjs';
 import { normalizeTreatmentEvent, rowToTreatmentEvent } from './treatment.mjs';
 
 function parseJson(value, fallback) {
@@ -37,6 +39,11 @@ function rowToCheckin(row) {
     notes: row.notes ?? '',
     redFlags: row.red_flags ?? ''
   };
+}
+
+function rowToTrackedItem(row) {
+  if (!row) return null;
+  return { id: row.id, category: row.category, label: row.label, active: Boolean(row.active), sortOrder: row.sort_order };
 }
 
 function observationValues(checkin, recordedAt, updatedAt) {
@@ -115,6 +122,18 @@ export function createRepository(dbPath) {
     INSERT INTO treatment_events(id, effective_date, regimen_json, note, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?)
   `);
+  const trackedItemInsert = db.prepare(`
+    INSERT INTO tracked_items(id, category, label, active, sort_order)
+    VALUES (?, ?, ?, ?, ?) RETURNING *
+  `);
+  const trackedItemById = db.prepare('SELECT * FROM tracked_items WHERE id=?');
+  const trackedItemUpdate = db.prepare(`
+    UPDATE tracked_items SET label=?, active=? WHERE id=? RETURNING *
+  `);
+  const trackedOrderUpdate = db.prepare('UPDATE tracked_items SET sort_order=? WHERE id=?');
+  const portableTrackedItemInsert = db.prepare(`
+    INSERT INTO tracked_items(id, category, label, active, sort_order) VALUES (?, ?, ?, ?, ?)
+  `);
 
   function buildListQuery({ from = null, to = null, kind = null, period = null } = {}) {
     const conditions = [];
@@ -128,7 +147,7 @@ export function createRepository(dbPath) {
 
   const repo = {
     createCheckin(input, now = new Date()) {
-      const checkin = normalizeCheckin(input);
+      const checkin = normalizeCheckin(input, { trackedItems: this.listTrackedItems() });
       const timestamp = now.toISOString();
       return rowToCheckin(insert.get(...observationValues(checkin, timestamp, timestamp)));
     },
@@ -137,7 +156,8 @@ export function createRepository(dbPath) {
       if (!current) return null;
       const merged = { ...current, ...input };
       const checkin = normalizeCheckin(merged, {
-        allowMissingObservedAt: current.observedAt === null && merged.observedAt === null
+        allowMissingObservedAt: current.observedAt === null && merged.observedAt === null,
+        trackedItems: this.listTrackedItems()
       });
       const values = observationValues(checkin, current.recordedAt, now.toISOString());
       values.splice(5, 1);
@@ -154,6 +174,39 @@ export function createRepository(dbPath) {
     listAllCheckins(filters = {}) {
       const { where, params } = buildListQuery(filters);
       return db.prepare(`SELECT * FROM checkins ${where} ORDER BY local_date DESC, COALESCE(observed_at, recorded_at) DESC, id DESC`).all(...params).map(rowToCheckin);
+    },
+    listTrackedItems() {
+      return db.prepare('SELECT * FROM tracked_items ORDER BY category, sort_order, id').all().map(rowToTrackedItem);
+    },
+    createTrackedItem({ category, label } = {}) {
+      if (!TRACKED_ITEM_CATEGORIES.includes(category)) throw new TypeError('Invalid tracked item category');
+      const sortOrder = Number(db.prepare('SELECT COUNT(*) AS count FROM tracked_items WHERE category=?').get(category).count);
+      const item = normalizeTrackedItem({ id: `custom:${randomUUID()}`, category, label, active: true, sortOrder });
+      return rowToTrackedItem(trackedItemInsert.get(item.id, item.category, item.label, Number(item.active), item.sortOrder));
+    },
+    updateTrackedItem(id, patch = {}) {
+      if (!patch || typeof patch !== 'object' || Array.isArray(patch)
+        || Object.keys(patch).some((key) => !['label', 'active'].includes(key))) {
+        throw new TypeError('Invalid tracked item patch');
+      }
+      const current = rowToTrackedItem(trackedItemById.get(id));
+      if (!current) return null;
+      const item = normalizeTrackedItem({ ...current, ...patch });
+      return rowToTrackedItem(trackedItemUpdate.get(item.label, Number(item.active), item.id));
+    },
+    reorderTrackedItems(category, orderedIds) {
+      if (!TRACKED_ITEM_CATEGORIES.includes(category) || !Array.isArray(orderedIds)) throw new TypeError('Invalid tracked item order');
+      const current = this.listTrackedItems().filter((item) => item.category === category);
+      const currentIds = new Set(current.map((item) => item.id));
+      if (orderedIds.length !== current.length || new Set(orderedIds).size !== orderedIds.length || orderedIds.some((id) => !currentIds.has(id))) {
+        throw new TypeError('Tracked item order must include the complete category');
+      }
+      db.exec('BEGIN');
+      try {
+        orderedIds.forEach((id, index) => trackedOrderUpdate.run(index, id));
+        db.exec('COMMIT');
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
+      return this.listTrackedItems().filter((item) => item.category === category);
     },
     deleteCheckin(id) { return deleteById.run(Number(id)).changes > 0; },
     getSettings() {
@@ -217,8 +270,11 @@ export function createRepository(dbPath) {
       const fallbackTimestamp = now.toISOString();
       db.exec('BEGIN IMMEDIATE');
       try {
-        db.exec('DELETE FROM checkins; DELETE FROM treatment_events;');
+        db.exec('DELETE FROM checkins; DELETE FROM treatment_events; DELETE FROM tracked_items;');
         db.prepare("DELETE FROM sqlite_sequence WHERE name IN ('checkins','treatment_events')").run();
+        for (const item of data.trackedItems) {
+          portableTrackedItemInsert.run(item.id, item.category, item.label, Number(item.active), item.sortOrder);
+        }
         for (const observation of data.observations) {
           portableObservationInsert.run(
             observation.id ?? null,

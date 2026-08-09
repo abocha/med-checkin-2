@@ -44,6 +44,21 @@ test('normalizeCheckin validates observation identity and timestamp', () => {
   assert.throws(() => normalizeCheckin({ localDate: '2026-07-31', slot: '13:00', ...scales }), /kind/i);
 });
 
+test('normalizeCheckin preserves known archived definitions and rejects unknown or wrong-category IDs', () => {
+  const trackedItems = [
+    { id: 'custom:symptom-1', category: 'symptoms', label: 'Custom symptom', active: false, sortOrder: 0 },
+    { id: 'context-1', category: 'context', label: 'Context', active: true, sortOrder: 0 },
+    { id: 'activation-1', category: 'activation', label: 'Activation', active: true, sortOrder: 0 }
+  ];
+  const input = {
+    kind: 'extra', period: null, localDate: '2026-07-31',
+    observedAt: '2026-07-31T08:00:00.000Z', symptoms: ['custom:symptom-1']
+  };
+  assert.deepEqual(normalizeCheckin(input, { trackedItems }).symptoms, ['custom:symptom-1']);
+  assert.throws(() => normalizeCheckin({ ...input, context: ['custom:symptom-1'], symptoms: [] }, { trackedItems }), /context/i);
+  assert.throws(() => normalizeCheckin({ ...input, symptoms: ['unknown-item'] }, { trackedItems }), /symptoms/i);
+});
+
 test('slotForTime chooses the nearest active scheduled window', () => {
   assert.equal(slotForTime(new Date(2026, 6, 31, 13, 15), DEFAULT_SETTINGS), '13:00');
   assert.equal(slotForTime(new Date(2026, 6, 31, 21, 45), DEFAULT_SETTINGS), '22:00');

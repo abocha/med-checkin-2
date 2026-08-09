@@ -1,18 +1,21 @@
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-const VERSION = '2.2.2';
+const VERSION = '2.3.0';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const dist = join(root, 'dist');
 const stage = join(dist, 'package-stage');
 const packageRoot = join(stage, 'MedCheckin2');
-const archiveName = 'med-checkin-2.2.2-windows-installer.zip';
+const archiveName = 'med-checkin-2.3.0-windows-installer.zip';
 const archive = join(dist, archiveName);
+const checksumFile = `${archive}.sha256`;
 
 rmSync(stage, { recursive: true, force: true });
 rmSync(archive, { force: true });
+rmSync(checksumFile, { force: true });
 mkdirSync(packageRoot, { recursive: true });
 
 const entries = [
@@ -46,4 +49,8 @@ if (result.status !== 0 || !existsSync(archive)) throw new Error('Could not crea
 const verifier = spawnSync(process.execPath, [join(root, 'scripts', 'verify-release.mjs'), archive], { stdio: 'inherit' });
 if (verifier.status !== 0) throw new Error('Release archive verification failed');
 
+const checksum = createHash('sha256').update(readFileSync(archive)).digest('hex');
+writeFileSync(checksumFile, `${checksum}  ${archiveName}\n`, 'utf8');
+
 console.log(archive);
+console.log(checksumFile);

@@ -43,7 +43,7 @@ Get-CimInstance -ClassName Win32_Process -Filter "Name = 'msedge.exe'" -ErrorAct
 
 $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
 $desktop = [Environment]::GetFolderPath('Desktop')
-foreach ($name in @('Med Check-in 2.0.lnk', 'Med Check-in 2.1.lnk', 'Med Check-in 2.2.lnk')) {
+foreach ($name in @('Med Check-in 2.0.lnk', 'Med Check-in 2.1.lnk', 'Med Check-in 2.2.lnk', 'Med Check-in 2.3.lnk')) {
   Remove-Item (Join-Path $startMenu $name) -Force -ErrorAction SilentlyContinue
   Remove-Item (Join-Path $desktop $name) -Force -ErrorAction SilentlyContinue
 }

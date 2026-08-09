@@ -2,15 +2,16 @@ import { copyFileSync, existsSync, readdirSync, rmSync, statSync } from 'node:fs
 import { basename, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
-  ACTIVATION_FIELDS, CONTEXT_FIELDS, DEFAULT_SETTINGS, SCALE_FIELDS, SYMPTOM_FIELDS, normalizeCheckin
+  DEFAULT_SETTINGS, SCALE_FIELDS, normalizeCheckin
 } from './domain.mjs';
 import { createTimestampedBackup } from './backups.mjs';
 import { prepareDatabase as prepareDatabaseDefault } from './migrations.mjs';
 import { LATEST_SCHEMA_VERSION } from './schema.mjs';
 import { normalizeTreatmentEvent } from './treatment.mjs';
+import { BUILTIN_TRACKED_ITEMS, validateTrackedItems } from './tracked-items.mjs';
 
 const PORTABLE_FORMAT = 'med-checkin-2';
-const PORTABLE_VERSION = 1;
+const PORTABLE_VERSION = 2;
 const PORTABLE_SETTINGS = ['dayTime', 'eveningTime', 'catchupHours', 'repeatMinutes'];
 const BACKUP_PATTERN = /^(?:med-checkin-(\d{4}-\d{2}-\d{2})|(?:manual|pre-migration|pre-restore|pre-import)-(\d{8}T\d{6}Z))\.sqlite$/;
 const V1_REQUIRED_COLUMNS = Object.freeze({
@@ -24,6 +25,7 @@ const V1_REQUIRED_COLUMNS = Object.freeze({
   reminder_state: ['local_date', 'period', 'snoozed_until', 'dismissed_at', 'notified_at'],
   treatment_events: ['id', 'effective_date', 'regimen_json', 'note', 'created_at', 'updated_at']
 });
+const V2_TRACKED_ITEMS_COLUMNS = Object.freeze(['id', 'category', 'label', 'active', 'sort_order']);
 
 function backupSortKey(name) {
   const match = BACKUP_PATTERN.exec(name);
@@ -61,6 +63,14 @@ function validateV1Schema(db) {
   }
 }
 
+function validateV2Schema(db) {
+  validateV1Schema(db);
+  const columns = tableColumns(db, 'tracked_items');
+  if (V2_TRACKED_ITEMS_COLUMNS.some((column) => !columns.has(column))) {
+    throw new TypeError('Unrecognized Med Check-in schema: incomplete tracked_items table');
+  }
+}
+
 export function validateBackupFile(path) {
   let db;
   try {
@@ -69,12 +79,13 @@ export function validateBackupFile(path) {
     if (Object.values(quickCheck)[0] !== 'ok') throw new TypeError('SQLite integrity check failed');
     const userVersion = Number(db.prepare('PRAGMA user_version').get().user_version);
     if (userVersion > LATEST_SCHEMA_VERSION) throw new TypeError(`Backup uses newer schema version ${userVersion}`);
-    if (![0, LATEST_SCHEMA_VERSION].includes(userVersion)) throw new TypeError(`Unsupported schema version ${userVersion}`);
+    if (![0, 1, LATEST_SCHEMA_VERSION].includes(userVersion)) throw new TypeError(`Unsupported schema version ${userVersion}`);
     const hasCheckins = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkins'").get();
     if (!hasCheckins) throw new TypeError('Backup is not a recognized Med Check-in database');
     const columns = tableColumns(db, 'checkins');
     if (userVersion === 0 && !columns.has('slot')) throw new TypeError('Unrecognized legacy Med Check-in schema');
     if (userVersion === 1) validateV1Schema(db);
+    if (userVersion === 2) validateV2Schema(db);
     return { userVersion };
   } catch (error) {
     if (error instanceof TypeError) throw error;
@@ -131,11 +142,7 @@ function validTimestamp(value, field, { nullable = false, optional = false } = {
   return value;
 }
 
-function validateFlags(values, allowed, field) {
-  if (!Array.isArray(values) || values.some((value) => !allowed.includes(value))) throw new TypeError(`Invalid ${field}`);
-}
-
-function validateObservation(input, ids, scheduledIdentities) {
+function validateObservation(input, ids, scheduledIdentities, trackedItems) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new TypeError('Invalid observation');
   if (input.id !== undefined) {
     if (!Number.isInteger(input.id) || input.id <= 0 || ids.has(input.id)) throw new TypeError('Invalid or duplicate observation id');
@@ -144,13 +151,10 @@ function validateObservation(input, ids, scheduledIdentities) {
   for (const field of SCALE_FIELDS) {
     if (input[field] !== null && typeof input[field] !== 'number') throw new TypeError(`Invalid ${field}`);
   }
-  validateFlags(input.context ?? [], CONTEXT_FIELDS, 'context');
-  validateFlags(input.symptoms ?? [], SYMPTOM_FIELDS, 'symptoms');
-  validateFlags(input.activation ?? [], ACTIVATION_FIELDS, 'activation');
   if (input.notes !== undefined && typeof input.notes !== 'string') throw new TypeError('Invalid notes');
   if (input.redFlags !== undefined && typeof input.redFlags !== 'string') throw new TypeError('Invalid redFlags');
   const allowMissingObservedAt = input.kind === 'scheduled' && input.observedAt === null;
-  const normalized = normalizeCheckin(input, { allowMissingObservedAt });
+  const normalized = normalizeCheckin(input, { allowMissingObservedAt, trackedItems });
   const recordedAt = validTimestamp(input.recordedAt, 'recordedAt', { optional: true });
   const updatedAt = validTimestamp(input.updatedAt, 'updatedAt', { optional: true });
   if (input.kind === 'scheduled') {
@@ -192,18 +196,22 @@ function validateSettings(settings) {
 export function validatePortableImport(payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new TypeError('Invalid portable JSON');
   if (payload.format !== PORTABLE_FORMAT) throw new TypeError('Invalid portable format');
-  if (payload.formatVersion !== PORTABLE_VERSION) throw new TypeError(`Unsupported portable format version ${payload.formatVersion}`);
+  if (![1, PORTABLE_VERSION].includes(payload.formatVersion)) throw new TypeError(`Unsupported portable format version ${payload.formatVersion}`);
   validTimestamp(payload.exportedAt, 'exportedAt');
   if (!Array.isArray(payload.observations) || !Array.isArray(payload.treatmentEvents)) throw new TypeError('Invalid portable collections');
   const observationIds = new Set();
   const scheduledIdentities = new Set();
   const treatmentIds = new Set();
   const treatmentIdentities = new Set();
+  const trackedItems = payload.formatVersion === 1
+    ? BUILTIN_TRACKED_ITEMS.map((item) => ({ ...item }))
+    : validateTrackedItems(payload.trackedItems);
   return {
     format: PORTABLE_FORMAT,
-    formatVersion: PORTABLE_VERSION,
+    formatVersion: payload.formatVersion,
     exportedAt: payload.exportedAt,
-    observations: payload.observations.map((item) => validateObservation(item, observationIds, scheduledIdentities)),
+    trackedItems,
+    observations: payload.observations.map((item) => validateObservation(item, observationIds, scheduledIdentities, trackedItems)),
     treatmentEvents: payload.treatmentEvents.map((item) => validateTreatment(item, treatmentIds, treatmentIdentities)),
     settings: validateSettings(payload.settings)
   };
@@ -215,6 +223,7 @@ export function previewPortableImport(payload) {
   return {
     format: data.format,
     formatVersion: data.formatVersion,
+    trackedItemCount: data.trackedItems.length,
     observationCount: data.observations.length,
     extraCount: data.observations.filter((item) => item.kind === 'extra').length,
     treatmentEventCount: data.treatmentEvents.length,
@@ -229,6 +238,7 @@ export function buildPortableExport(repo, now = new Date()) {
     format: PORTABLE_FORMAT,
     formatVersion: PORTABLE_VERSION,
     exportedAt: now.toISOString(),
+    trackedItems: repo.listTrackedItems(),
     observations: repo.listAllCheckins(),
     treatmentEvents: repo.listTreatmentEvents(),
     settings: Object.fromEntries(PORTABLE_SETTINGS.map((key) => [key, settings[key] ?? DEFAULT_SETTINGS[key]]))

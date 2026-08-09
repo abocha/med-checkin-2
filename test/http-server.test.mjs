@@ -76,7 +76,7 @@ test('API exports, previews, and replaces only versioned portable data', async (
     let response = await api(f.base, '/api/v1/export.json');
     const exported = await response.json();
     assert.equal(exported.format, 'med-checkin-2');
-    assert.equal(exported.formatVersion, 1);
+    assert.equal(exported.formatVersion, 2);
     assert.equal(exported.observations.length, 1);
     assert.equal('remindersPausedUntil' in exported.settings, false);
 
@@ -158,6 +158,8 @@ test('API reports a scheduled identity collision during edit as 409 with the exi
 test('API exposes treatment event CRUD and current effective treatment', async () => {
   const f = await fixture();
   try {
+    f.repo.createTreatmentEvent({ effectiveDate: null, regimen: [], note: 'test baseline' });
+    f.repo.createTreatmentEvent({ effectiveDate: '2026-07-07', regimen: [], note: 'test dated change' });
     let response = await api(f.base, '/api/v1/treatment-events');
     assert.equal((await response.json()).items.length, 2);
     response = await api(f.base, '/api/v1/treatment-events', {
@@ -192,6 +194,91 @@ test('API exposes settings, analytics, reminders, and exports', async () => {
     const csv = await response.text();
     assert.match(csv, /localDate,kind,period/);
     assert.match(csv, /2026-07-31/);
+  } finally { await f.close(); }
+});
+
+test('API exposes server-owned update status and never accepts browser download authority', async () => {
+  const calls = [];
+  const updateService = {
+    getStatus: () => ({ installedVersion: '2.3.0', phase: 'available', availableVersion: '2.3.1', releaseNotes: 'Release notes' }),
+    async check(options) { calls.push(['check', options]); return this.getStatus(); },
+    async installAvailable() { calls.push(['install']); return { ...this.getStatus(), phase: 'installing' }; }
+  };
+  const events = [];
+  const f = await fixture({ updateService, eventHub: { add() {}, remove() {}, broadcast: (...args) => events.push(args), get size() { return 0; } } });
+  try {
+    let response = await api(f.base, '/api/v1/bootstrap');
+    assert.equal((await response.json()).updates.availableVersion, '2.3.1');
+    response = await api(f.base, '/api/v1/updates');
+    assert.equal((await response.json()).installedVersion, '2.3.0');
+    response = await api(f.base, '/api/v1/updates/check', { method: 'POST', body: JSON.stringify({ url: 'https://attacker.test/update.zip' }) });
+    assert.equal(response.status, 200);
+    response = await api(f.base, '/api/v1/updates/install', { method: 'POST', body: JSON.stringify({ installerPath: 'C:\\attacker.exe' }) });
+    assert.equal(response.status, 200);
+    assert.deepEqual(calls, [['check', { force: true }], ['install']]);
+    assert.deepEqual(events, []);
+  } finally { await f.close(); }
+});
+
+test('API bootstraps and mutates tracked items through authenticated routes', async () => {
+  let persisted = 0;
+  const f = await fixture({ onPersisted: async () => { persisted += 1; } });
+  try {
+    let response = await api(f.base, '/api/v1/bootstrap');
+    assert.equal(response.status, 200);
+    const bootstrap = await response.json();
+    assert.ok(bootstrap.trackedItems.some(item => item.id === 'caffeine' && item.category === 'context'));
+
+    response = await api(f.base, '/api/v1/tracked-items', {
+      method: 'POST', body: JSON.stringify({ category: 'symptoms', label: 'Custom symptom' })
+    });
+    assert.equal(response.status, 201);
+    let payload = await response.json();
+    const custom = payload.items.find(item => item.label === 'Custom symptom');
+    assert.equal(custom.active, true);
+
+    response = await api(f.base, `/api/v1/tracked-items/${encodeURIComponent(custom.id)}`, {
+      method: 'PUT', body: JSON.stringify({ label: 'Renamed symptom', active: false })
+    });
+    assert.equal(response.status, 200);
+    payload = await response.json();
+    assert.deepEqual(payload.items.find(item => item.id === custom.id), {
+      ...custom, label: 'Renamed symptom', active: false
+    });
+    response = await api(f.base, '/api/v1/bootstrap');
+    assert.equal((await response.json()).trackedItems.find(item => item.id === custom.id).active, false);
+
+    const contextIds = bootstrap.trackedItems.filter(item => item.category === 'context').map(item => item.id);
+    response = await api(f.base, '/api/v1/tracked-items/order', {
+      method: 'PUT', body: JSON.stringify({ category: 'context', ids: [...contextIds].reverse() })
+    });
+    assert.equal(response.status, 200);
+    payload = await response.json();
+    assert.deepEqual(payload.items.filter(item => item.category === 'context').map(item => item.id), [...contextIds].reverse());
+    assert.equal(persisted, 3);
+
+    response = await api(f.base, `/api/v1/tracked-items/${encodeURIComponent(custom.id)}`, { method: 'DELETE' });
+    assert.equal(response.status, 404);
+  } finally { await f.close(); }
+});
+
+test('API accepts custom and archived flags in their category and rejects wrong-category flags', async () => {
+  const f = await fixture();
+  try {
+    let response = await api(f.base, '/api/v1/tracked-items', {
+      method: 'POST', body: JSON.stringify({ category: 'symptoms', label: 'Custom symptom' })
+    });
+    const custom = (await response.json()).items.find(item => item.label === 'Custom symptom');
+    await api(f.base, `/api/v1/tracked-items/${encodeURIComponent(custom.id)}`, {
+      method: 'PUT', body: JSON.stringify({ active: false })
+    });
+    const valid = { ...body, symptoms: [custom.id] };
+    response = await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify(valid) });
+    assert.equal(response.status, 201);
+    response = await api(f.base, '/api/v1/checkins', {
+      method: 'POST', body: JSON.stringify({ ...body, localDate: '2026-08-01', context: [custom.id] })
+    });
+    assert.equal(response.status, 400);
   } finally { await f.close(); }
 });
 
@@ -233,7 +320,7 @@ test('browser UI requires a valid launch token and serves local assets', async (
     assert.match(response.headers.get('content-type'), /text\/html/);
     assert.match(response.headers.get('content-security-policy'), /default-src/);
     const html = await response.text();
-    assert.match(html, /Med Check-in 2\.2/);
+    assert.match(html, /Med Check-in 2\.3/);
     assert.doesNotMatch(html, /neutralino/i);
 
     response = await fetch(f.base + '/app/app.js');
@@ -330,6 +417,7 @@ test('fixed data-folder control queues the server-owned path and reminder snooze
 test('analytics API excludes Extras and returns dated treatment markers', async () => {
   const f = await fixture();
   try {
+    f.repo.createTreatmentEvent({ effectiveDate: '2026-07-07', regimen: [], note: 'analytics fixture' });
     await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify(body) });
     await api(f.base, '/api/v1/checkins', { method: 'POST', body: JSON.stringify({ kind: 'extra', period: null, localDate: '2026-07-31', observedAt: '2026-07-31T08:00:00.000Z', mood: 1 }) });
     const response = await api(f.base, '/api/v1/analytics');

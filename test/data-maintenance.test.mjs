@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createRepository } from '../backend/repository.mjs';
 import { prepareDatabase } from '../backend/migrations.mjs';
+import { BUILTIN_TRACKED_ITEMS } from '../backend/tracked-items.mjs';
 import {
   buildPortableExport,
   createManualBackup,
@@ -55,6 +56,14 @@ function portable(overrides = {}) {
   };
 }
 
+function portableV2(overrides = {}) {
+  return portable({
+    formatVersion: 2,
+    trackedItems: BUILTIN_TRACKED_ITEMS.map((item) => ({ ...item })),
+    ...overrides
+  });
+}
+
 test('backup listing recognizes only app-created names and rejects corrupt or newer schemas', () => {
   const root = mkdtempSync(join(tmpdir(), 'med-checkin-maintenance-'));
   const dbPath = join(root, 'med-checkin.sqlite');
@@ -70,12 +79,12 @@ test('backup listing recognizes only app-created names and rejects corrupt or ne
       'pre-restore-20260807T010204Z.sqlite',
       'manual-20260807T010203Z.sqlite'
     ]);
-    assert.equal(validateBackupFile(manual).userVersion, 1);
+    assert.equal(validateBackupFile(manual).userVersion, 2);
     assert.throws(() => validateBackupFile(join(backupDir, 'manual-20260807T010205Z.sqlite')), /sqlite|database/i);
 
     const newer = join(backupDir, 'manual-20260807T010206Z.sqlite');
     const db = new DatabaseSync(newer);
-    try { db.exec('PRAGMA user_version = 2; CREATE TABLE checkins(id INTEGER);'); } finally { db.close(); }
+    try { db.exec('PRAGMA user_version = 3; CREATE TABLE checkins(id INTEGER);'); } finally { db.close(); }
     assert.throws(() => validateBackupFile(newer), /newer|version/i);
 
     const incomplete = join(backupDir, 'manual-20260807T010207Z.sqlite');
@@ -87,6 +96,16 @@ test('backup listing recognizes only app-created names and rejects corrupt or ne
       `);
     } finally { incompleteDb.close(); }
     assert.throws(() => validateBackupFile(incomplete), /schema|settings|columns/i);
+
+    const incompleteV2 = join(backupDir, 'manual-20260807T010208Z.sqlite');
+    const incompleteV2Db = new DatabaseSync(incompleteV2);
+    try {
+      incompleteV2Db.exec(`
+        PRAGMA user_version = 2;
+        CREATE TABLE checkins(id INTEGER PRIMARY KEY, kind TEXT, period TEXT);
+      `);
+    } finally { incompleteV2Db.close(); }
+    assert.throws(() => validateBackupFile(incompleteV2), /schema|settings|columns/i);
   } finally { repo.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -105,7 +124,7 @@ test('restore validates first and creates a recoverable pre-restore backup befor
   });
   try {
     assert.equal(existsSync(result.preRestoreBackupPath), true);
-    assert.equal(result.restoredUserVersion, 1);
+    assert.equal(result.restoredUserVersion, 2);
     const restored = createRepository(dbPath);
     try { assert.equal(restored.listAllCheckins()[0].mood, 6); }
     finally { restored.close(); }
@@ -124,10 +143,15 @@ test('restore validates first and creates a recoverable pre-restore backup befor
 test('portable preview validates the exact format and reports bounded counts and dates', () => {
   assert.deepEqual(previewPortableImport(portable()), {
     format: 'med-checkin-2', formatVersion: 1,
-    observationCount: 2, extraCount: 1, treatmentEventCount: 2,
+    trackedItemCount: 20, observationCount: 2, extraCount: 1, treatmentEventCount: 2,
     dateFrom: '2026-08-01', dateTo: '2026-08-01'
   });
-  assert.throws(() => previewPortableImport(portable({ formatVersion: 2 })), /version/i);
+  assert.throws(() => previewPortableImport(portableV2({ trackedItems: BUILTIN_TRACKED_ITEMS.slice(1) })), /built-in|missing/i);
+  assert.throws(() => previewPortableImport(portableV2({ trackedItems: [
+    ...BUILTIN_TRACKED_ITEMS,
+    { id: 'caffeine', category: 'context', label: 'Duplicate', active: true, sortOrder: 6 }
+  ] })), /duplicate/i);
+  assert.throws(() => previewPortableImport(portableV2({ observations: [scheduled({ symptoms: ['caffeine'] })] })), /symptoms/i);
   assert.throws(() => previewPortableImport(portable({ observations: [scheduled(), scheduled({ id: 12 })] })), /duplicate scheduled/i);
   assert.throws(() => previewPortableImport(portable({ observations: [scheduled({ mood: 11 })] })), /mood/i);
   assert.throws(() => previewPortableImport(portable({ observations: [scheduled({ observedAt: 'not-a-time' })] })), /observedAt/i);
@@ -159,7 +183,7 @@ test('failed restore preparation rolls the live database back to its pre-restore
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('portable export is versioned and Replace preserves source identity while leaving reminder state local', () => {
+test('portable export is v2 and Replace preserves source identity while leaving reminder state local', () => {
   const root = mkdtempSync(join(tmpdir(), 'med-checkin-import-'));
   const dbPath = join(root, 'med-checkin.sqlite');
   const backupDir = join(root, 'backups');
@@ -171,11 +195,12 @@ test('portable export is versioned and Replace preserves source identity while l
 
     const exported = buildPortableExport(repo, new Date('2026-08-07T01:02:03.000Z'));
     assert.equal(exported.format, 'med-checkin-2');
-    assert.equal(exported.formatVersion, 1);
+    assert.equal(exported.formatVersion, 2);
     assert.equal(exported.exportedAt, '2026-08-07T01:02:03.000Z');
+    assert.equal(exported.trackedItems.length, 20);
     assert.deepEqual(Object.keys(exported.settings).sort(), ['catchupHours', 'dayTime', 'eveningTime', 'repeatMinutes']);
 
-    const result = replacePortableData({ repo, dbPath, backupDir, payload: portable(), now: new Date('2026-08-07T02:03:04.000Z') });
+    const result = replacePortableData({ repo, dbPath, backupDir, payload: portableV2(), now: new Date('2026-08-07T02:03:04.000Z') });
     assert.equal(existsSync(result.preImportBackupPath), true);
     assert.deepEqual(repo.listAllCheckins().map((item) => item.id).sort((a, b) => a - b), [10, 11]);
     assert.equal(repo.getCheckinById(10).recordedAt, '2026-08-01T06:10:00.000Z');
@@ -183,5 +208,35 @@ test('portable export is versioned and Replace preserves source identity while l
     assert.equal(repo.getSettings().dayTime, '12:30');
     assert.equal(repo.getSettings().remindersPausedUntil, '2026-08-10T00:00:00.000Z');
     assert.equal(repo.getReminderStates('2026-08-01').day.dismissedAt, '2026-08-01T06:00:00.000Z');
+  } finally { repo.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('portable v2 round-trips custom definitions and rejects Replace before changing live data', () => {
+  const root = mkdtempSync(join(tmpdir(), 'med-checkin-portable-v2-'));
+  const dbPath = join(root, 'med-checkin.sqlite');
+  const backupDir = join(root, 'backups');
+  const repo = createRepository(dbPath);
+  try {
+    const custom = repo.createTrackedItem({ category: 'symptoms', label: 'Original custom' });
+    repo.updateTrackedItem(custom.id, { label: 'Renamed custom', active: false });
+    const symptomIds = repo.listTrackedItems().filter((item) => item.category === 'symptoms').map((item) => item.id);
+    repo.reorderTrackedItems('symptoms', [...symptomIds].reverse());
+    const observation = repo.createCheckin(scheduled({ id: undefined, symptoms: [custom.id] }), new Date('2026-08-01T06:10:00.000Z'));
+    const payload = buildPortableExport(repo, new Date('2026-08-07T01:02:03.000Z'));
+    assert.equal(payload.formatVersion, 2);
+    assert.deepEqual(payload.trackedItems.find((item) => item.id === custom.id), {
+      id: custom.id, category: 'symptoms', label: 'Renamed custom', active: false, sortOrder: 0
+    });
+    repo.createCheckin(scheduled({ id: undefined, localDate: '2026-08-02', symptoms: [] }), new Date('2026-08-02T06:10:00.000Z'));
+    replacePortableData({ repo, dbPath, backupDir, payload, now: new Date('2026-08-07T02:03:04.000Z') });
+    assert.deepEqual(repo.getCheckinById(observation.id).symptoms, [custom.id]);
+    assert.deepEqual(repo.listTrackedItems().find((item) => item.id === custom.id), {
+      id: custom.id, category: 'symptoms', label: 'Renamed custom', active: false, sortOrder: 0
+    });
+    const before = repo.listAllCheckins().map((item) => item.id);
+    assert.throws(() => replacePortableData({
+      repo, dbPath, backupDir, payload: portableV2({ trackedItems: BUILTIN_TRACKED_ITEMS.slice(1) })
+    }), /built-in|missing/i);
+    assert.deepEqual(repo.listAllCheckins().map((item) => item.id), before);
   } finally { repo.close(); rmSync(root, { recursive: true, force: true }); }
 });

@@ -5,15 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRepository } from '../backend/repository.mjs';
 
-test('repository seeds and resolves the known treatment history', () => {
+test('fresh repository has no treatment history or effective regimen', () => {
   const root = mkdtempSync(join(tmpdir(), 'med-checkin-treatment-'));
   const repo = createRepository(join(root, 'test.sqlite'));
   try {
-    const events = repo.listTreatmentEvents();
-    assert.equal(events.length, 2);
-    assert.equal(events[0].effectiveDate, null);
-    assert.equal(repo.getEffectiveTreatment('2026-07-06').regimen[0].amount, 20);
-    assert.equal(repo.getEffectiveTreatment('2026-07-07').regimen[0].amount, 10);
+    assert.deepEqual(repo.listTreatmentEvents(), []);
+    assert.equal(repo.getEffectiveTreatment('2026-07-06'), null);
   } finally { repo.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -22,6 +19,8 @@ test('treatment events enforce one baseline/date and validate regimen snapshots'
   const repo = createRepository(join(root, 'test.sqlite'));
   const now = new Date('2026-08-07T01:00:00.000Z');
   try {
+    repo.createTreatmentEvent({ effectiveDate: null, regimen: [], note: '' }, now);
+    repo.createTreatmentEvent({ effectiveDate: '2026-07-07', regimen: [], note: '' }, now);
     assert.throws(() => repo.createTreatmentEvent({ effectiveDate: null, regimen: [], note: '' }, now), /baseline|unique/i);
     assert.throws(() => repo.createTreatmentEvent({ effectiveDate: '2026-07-07', regimen: [], note: '' }, now), /date|unique/i);
     assert.throws(() => repo.createTreatmentEvent({

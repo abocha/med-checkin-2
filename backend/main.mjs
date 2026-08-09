@@ -13,6 +13,7 @@ import { terminateOwnedProcess } from './process-safety.mjs';
 import { createHostActionQueue } from './host-actions.mjs';
 import { prepareDatabase } from './migrations.mjs';
 import { createDataMaintenance } from './data-maintenance.mjs';
+import { createUpdateService, UPDATE_CHECK_INTERVAL_MS } from './updates.mjs';
 
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const args = new Set(process.argv.slice(2));
@@ -126,6 +127,8 @@ const defaultPowerShell = process.platform === 'win32'
 const hostExecutable = process.env.MED_CHECKIN_HOST_BIN || defaultPowerShell;
 const startedAt = new Date();
 const hostActions = createHostActionQueue();
+const installedVersion = JSON.parse(readFileSync(join(APP_ROOT, 'package.json'), 'utf8')).version;
+let updateTimer = null;
 const hostArgs = process.env.MED_CHECKIN_HOST_ARGS_JSON
   ? JSON.parse(process.env.MED_CHECKIN_HOST_ARGS_JSON)
   : [
@@ -135,6 +138,26 @@ const hostArgs = process.env.MED_CHECKIN_HOST_ARGS_JSON
     ];
 if (args.has('--show')) hostArgs.push('-Show');
 let api;
+function scheduleUpdateCheck() {
+  clearTimeout(updateTimer);
+  const updateStatus = updates.getStatus();
+  const lastCheckedAt = updateStatus.lastCheckedAt;
+  const elapsed = lastCheckedAt ? Date.now() - new Date(lastCheckedAt).getTime() : UPDATE_CHECK_INTERVAL_MS;
+  const delay = updateStatus.error ? UPDATE_CHECK_INTERVAL_MS : Math.max(2000, UPDATE_CHECK_INTERVAL_MS - elapsed);
+  updateTimer = setTimeout(async () => {
+    await updates.check();
+  }, delay);
+  updateTimer.unref?.();
+}
+const updates = createUpdateService({
+  installedVersion,
+  dataDir: DATA_DIR,
+  hostActions,
+  onStatus(status) {
+    if (api?.port) api.eventHub.broadcast('update-state', status);
+    if (api?.port && status.phase !== 'checking') scheduleUpdateCheck();
+  }
+});
 const supervisor = hostExecutable
   ? createProcessSupervisor({
       executable: hostExecutable,
@@ -154,6 +177,7 @@ const supervisor = hostExecutable
 
 async function restartAfterMaintenance() {
   clearInterval(reminderTimer);
+  clearTimeout(updateTimer);
   supervisor.stop();
   try { await api.close(); } catch {}
   spawnDetached([]);
@@ -178,6 +202,7 @@ async function shutdown({ intentional = false } = {}) {
   shuttingDown = true;
   log('info', 'Backend shutting down', { intentional });
   clearInterval(reminderTimer);
+  clearTimeout(updateTimer);
   supervisor.stop();
   try { repo.checkpoint(); } catch {}
   try { await api.close(); } catch {}
@@ -186,7 +211,7 @@ async function shutdown({ intentional = false } = {}) {
 }
 
 api = createHttpServer({
-  repo, token, dataDir: DATA_DIR, resourcesDir: join(APP_ROOT, 'resources'), hostActions, maintenance,
+  repo, token, dataDir: DATA_DIR, resourcesDir: join(APP_ROOT, 'resources'), hostActions, maintenance, updateService: updates,
   onPersisted: persistBackup,
   onControl: async (command) => {
     if (command === 'restart-host') supervisor.restart();
@@ -211,6 +236,7 @@ try {
 
 writeRuntime();
 supervisor.start();
+scheduleUpdateCheck();
 
 function reminderTick() {
   const now = new Date();

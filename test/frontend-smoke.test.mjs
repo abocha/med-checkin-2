@@ -15,6 +15,18 @@ test('frontend contains all primary views and core check-in controls', () => {
   }
 });
 
+test('frontend exposes fixed eight-scale trend toggles and dynamic tracked-item groups', () => {
+  for (const field of ['mood', 'anxiety', 'irritability', 'energy', 'focus', 'functioning', 'sleepQuality', 'appetite']) {
+    assert.match(html, new RegExp(`data-trend-field=["']${field}["']`));
+  }
+  assert.match(html, /id=["']trend-fields["']/);
+  assert.match(js, /trackedItems/);
+  assert.match(js, /renderTrackedItems/);
+  assert.match(js, /selectedTrendFields/);
+  assert.doesNotMatch(js, /flagLabels/);
+  assert.doesNotMatch(html, /value=["']caffeine["']/);
+});
+
 test('frontend exposes semantic Day, Evening, Extra, missed-entry, and draft-recovery controls', () => {
   for (const id of ['day-checkin', 'evening-checkin', 'extra-checkin', 'use-previous-values', 'add-missed-checkin']) {
     assert.match(html, new RegExp(`id=["']${id}["']`));

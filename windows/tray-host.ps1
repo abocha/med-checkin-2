@@ -185,6 +185,22 @@ function Show-Reminder([object]$Due) {
   $script:NotifyIcon.ShowBalloonTip(12000)
 }
 
+function Start-UpdateInstaller([string]$StagingDir) {
+  $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\\')
+  $resolvedStaging = [IO.Path]::GetFullPath($StagingDir).TrimEnd('\\')
+  if (-not $resolvedStaging.StartsWith($temporaryRoot + '\\', [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Update staging directory is outside the current user temporary directory.'
+  }
+  if (-not ([IO.Path]::GetFileName($resolvedStaging).StartsWith('MedCheckin2-update-', [System.StringComparison]::OrdinalIgnoreCase))) {
+    throw 'Update staging directory has an unexpected name.'
+  }
+  $installer = Join-Path $resolvedStaging 'MedCheckin2\INSTALL.bat'
+  if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
+    throw 'Update staging directory does not contain MedCheckin2\INSTALL.bat.'
+  }
+  Start-Process -FilePath $installer -WorkingDirectory (Split-Path -Parent $installer) | Out-Null
+}
+
 function Handle-Poll([object]$Response) {
   if ($script:InitialShowPending) {
     $script:InitialShowPending = $false
@@ -200,6 +216,9 @@ function Handle-Poll([object]$Response) {
       Close-AppWindows
     } elseif ([string]$action.type -eq 'open-data-folder') {
       Start-Process -FilePath 'explorer.exe' -ArgumentList @([string]$action.path) | Out-Null
+    } elseif ([string]$action.type -eq 'install-update') {
+      try { Start-UpdateInstaller ([string]$action.stagingDir) }
+      catch { Write-TrayLog ('Could not start verified update installer: ' + $_.Exception.Message) }
     }
   }
 
@@ -342,7 +361,7 @@ try {
   [void]$menu.Items.Add((New-MenuItem 'Выйти до следующего входа' { Quit-UntilLogon }))
 
   $script:NotifyIcon = New-Object -TypeName System.Windows.Forms.NotifyIcon
-  $script:NotifyIcon.Text = 'Med Check-in 2.2'
+  $script:NotifyIcon.Text = 'Med Check-in 2.3'
   $iconPath = Join-Path $AppRoot 'resources\icons\app.ico'
   if (Test-Path -LiteralPath $iconPath) {
     $script:Icon = New-Object -TypeName System.Drawing.Icon -ArgumentList $iconPath

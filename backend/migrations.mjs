@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { createTimestampedBackup } from './backups.mjs';
-import { createLatestSchema, LATEST_SCHEMA_VERSION } from './schema.mjs';
+import { createLatestSchema, createTrackedItemsSchema, LATEST_SCHEMA_VERSION } from './schema.mjs';
 
 function tableExists(db, name) {
   return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
@@ -19,7 +19,6 @@ export function readUserVersion(dbPath) {
 }
 
 export function prepareDatabase({ dbPath, backupDir, now = new Date(), log = () => {} }) {
-  const seedAt = now.toISOString();
   const initial = new DatabaseSync(dbPath);
   initial.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   const version = Number(initial.prepare('PRAGMA user_version').get().user_version);
@@ -33,9 +32,30 @@ export function prepareDatabase({ dbPath, backupDir, now = new Date(), log = () 
   }
 
   if (!tableExists(initial, 'checkins')) {
-    createLatestSchema(initial, { seedAt });
+    createLatestSchema(initial);
     initial.close();
     return { migrated: false, backupPath: null, version: LATEST_SCHEMA_VERSION };
+  }
+
+  if (version === 1) {
+    initial.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    initial.close();
+    const backupPath = createTimestampedBackup({ dbPath, backupDir, prefix: 'pre-migration', now });
+    const db = new DatabaseSync(dbPath);
+    db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      createTrackedItemsSchema(db);
+      db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION}`);
+      db.exec('COMMIT');
+      log('info', 'Database migrated to schema version 2', { backupPath });
+      return { migrated: true, backupPath, version: LATEST_SCHEMA_VERSION };
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch {}
+      error.backupPath = backupPath;
+      log('fatal', 'Database migration failed', { backupPath, error: error.message });
+      throw error;
+    } finally { db.close(); }
   }
 
   const columns = tableColumns(initial, 'checkins');
@@ -54,7 +74,7 @@ export function prepareDatabase({ dbPath, backupDir, now = new Date(), log = () 
     db.exec('BEGIN IMMEDIATE');
     db.exec('ALTER TABLE checkins RENAME TO checkins_legacy');
     if (tableExists(db, 'reminder_state')) db.exec('ALTER TABLE reminder_state RENAME TO reminder_state_legacy');
-    createLatestSchema(db, { setUserVersion: false, seedAt });
+    createLatestSchema(db, { setUserVersion: false });
     db.exec(`
       INSERT INTO checkins (
         id, kind, local_date, period, scheduled_for, observed_at, recorded_at, updated_at,
@@ -85,7 +105,7 @@ export function prepareDatabase({ dbPath, backupDir, now = new Date(), log = () 
     db.exec('DROP TABLE checkins_legacy');
     db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION}`);
     db.exec('COMMIT');
-    log('info', 'Database migrated to schema version 1', { backupPath });
+    log('info', 'Database migrated to schema version 2', { backupPath });
     return { migrated: true, backupPath, version: LATEST_SCHEMA_VERSION };
   } catch (error) {
     try { db.exec('ROLLBACK'); } catch {}

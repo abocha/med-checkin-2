@@ -2,7 +2,8 @@
 const state = {
   apiBase: null, token: null, settings: null, currentDate: null, currentKind: 'scheduled', currentPeriod: 'day',
   currentRecord: null, activeReminder: null, eventSource: null, toastTimer: null, extraDraftKey: null,
-  dirty: false, draftTimer: null, pauseTimer: null, suppressDirty: false, historyOffset: 0, historyItems: [], treatmentEvents: [], pendingImport: null
+  dirty: false, draftTimer: null, pauseTimer: null, suppressDirty: false, historyOffset: 0, historyItems: [], treatmentEvents: [], pendingImport: null,
+  trackedItems: [], selectedTrendFields: ['mood', 'energy', 'focus', 'functioning'], analyticsData: null, staleDraftFlags: [], updates: null
 };
 
 const metricLabels = {
@@ -10,14 +11,8 @@ const metricLabels = {
   focus: 'Концентрация', functioning: 'Функционирование', sleepQuality: 'Сон', appetite: 'Аппетит'
 };
 const scaleFields = Object.keys(metricLabels);
-const flagLabels = {
-  caffeine: 'Кофеин', stress: 'Стресс', conflict: 'Конфликт', illnessPain: 'Болезнь/боль',
-  physicalActivity: 'Физическая активность', positiveProductiveDay: 'Приятный/продуктивный день',
-  dizziness: 'Головокружение', headache: 'Головная боль', nausea: 'Тошнота/живот', sweating: 'Потливость',
-  palpitations: 'Сердцебиение', brainZaps: 'Brain zaps', unusualDreams: 'Необычные сны', crying: 'Плаксивость',
-  reducedSleepNeed: 'Меньше потребности во сне', racingThoughts: 'Ускорение мыслей', talkativeness: 'Разговорчивость',
-  innerMotor: 'Внутренний мотор', impulsivity: 'Импульсивность', elevatedAgitated: 'Подъём/возбуждение'
-};
+const trackedCategoryLabels = { context: 'Контекст дня', symptoms: 'Телесные и побочные симптомы', activation: 'Необычная активация' };
+const trendDefaults = ['mood', 'energy', 'focus', 'functioning'];
 
 function $(selector, root = document) { return root.querySelector(selector); }
 function $$(selector, root = document) { return [...root.querySelectorAll(selector)]; }
@@ -72,6 +67,105 @@ function setConnection(online) {
   $('#connection-label').textContent = online ? 'Работает локально' : 'Нет связи с ядром';
 }
 
+function renderUpdates() {
+  const update = state.updates;
+  if (!update) return;
+  $('#installed-version').textContent = `Версия ${update.installedVersion}`;
+  const checked = update.lastCheckedAt ? `Последняя проверка: ${formatStoredTime(update.lastCheckedAt, { date: true })}.` : 'Проверка обновлений ещё не выполнялась.';
+  const available = update.availableVersion ? ` Доступна версия ${update.availableVersion}.` : '';
+  $('#update-status').textContent = update.error ? update.error : `${checked}${available}`;
+  const notes = $('#update-notes'); notes.textContent = update.releaseNotes || ''; notes.hidden = !update.releaseNotes;
+  $('#install-update').hidden = !update.availableVersion;
+  $('#update-available').classList.toggle('hidden', !update.availableVersion);
+}
+
+async function checkUpdates() { try { state.updates = await api('/api/v1/updates/check', { method: 'POST' }); renderUpdates(); } catch (error) { toast(`Не удалось проверить обновления: ${error.message}`); } }
+async function installUpdate() { try { state.updates = await api('/api/v1/updates/install', { method: 'POST' }); renderUpdates(); toast('Подготовка обновления…'); } catch (error) { toast(`Не удалось подготовить обновление: ${error.message}`); } }
+
+function trackedItemsFor(category, selected = []) {
+  const selectedSet = new Set(selected);
+  return state.trackedItems.filter(item => item.category === category && (item.active || selectedSet.has(item.id)));
+}
+
+function currentFlagSelections() {
+  return Object.fromEntries(['context', 'symptoms', 'activation'].map(category => [category, selectedFlags(category)]));
+}
+
+function findStaleDraftFlags(values = {}, trackedItems = state.trackedItems) {
+  const known = new Map((trackedItems || []).map(item => [item.id, item.category]));
+  return Object.keys(trackedCategoryLabels).flatMap(category => (values[category] || [])
+    .filter(id => known.get(id) !== category)
+    .map(id => ({ category, id })));
+}
+
+function buildDraftFlagValues(values = {}, staleFlags = []) {
+  const result = Object.fromEntries(Object.keys(trackedCategoryLabels).map(category => [category, [...new Set(values[category] || [])]]));
+  for (const stale of staleFlags || []) {
+    if (result[stale.category] && typeof stale.id === 'string' && !result[stale.category].includes(stale.id)) result[stale.category].push(stale.id);
+  }
+  return result;
+}
+
+if (globalThis.__MED_CHECKIN_TEST__) {
+  globalThis.__MED_CHECKIN_TEST__.draftLifecycle = { state, restoreDraft, persistDraft, validForSave, discardDraft, markDirty };
+}
+
+function renderTrackedItems(selected = currentFlagSelections()) {
+  for (const category of Object.keys(trackedCategoryLabels)) {
+    const container = $(`[data-flag-group="${category}"]`);
+    if (!container) continue;
+    container.innerHTML = trackedItemsFor(category, selected[category] || []).map(item => `<label class="tracked-item${item.active ? '' : ' archived'}"><input type="checkbox" value="${escapeHtml(item.id)}"${selected[category]?.includes(item.id) ? ' checked' : ''}> ${escapeHtml(item.label)}${item.active ? '' : ' <small>(архивная)</small>'}</label>`).join('') || '<span class="muted">Нет доступных отметок.</span>';
+  }
+}
+
+function renderTrackedSettings() {
+  const root = $('#tracked-items-settings');
+  if (!root) return;
+  root.innerHTML = Object.entries(trackedCategoryLabels).map(([category, heading]) => {
+    const items = state.trackedItems.filter(item => item.category === category);
+    return `<section class="tracked-settings-group" data-settings-group="${category}"><div class="section-heading"><h4>${heading}</h4><form class="tracked-add-form" data-add-tracked-category="${category}"><input name="label" type="text" maxlength="120" required placeholder="Новая отметка"><button type="submit" class="secondary">Добавить</button></form></div><div class="tracked-settings-list">${items.map((item, index) => `<div class="tracked-settings-row${item.active ? '' : ' archived'}" data-tracked-id="${escapeHtml(item.id)}"><input type="text" data-tracked-label value="${escapeHtml(item.label)}"><label><input type="checkbox" data-tracked-active${item.active ? ' checked' : ''}> активна</label><button type="button" class="ghost" data-tracked-save>Сохранить</button><button type="button" class="ghost" data-tracked-up="${index > 0 ? '' : 'disabled'}"${index > 0 ? '' : ' disabled'}>↑</button><button type="button" class="ghost" data-tracked-down="${index < items.length - 1 ? '' : 'disabled'}"${index < items.length - 1 ? '' : ' disabled'}>↓</button></div>`).join('') || '<p class="muted">Нет отметок.</p>'}</div></section>`;
+  }).join('');
+  $$('[data-add-tracked-category]', root).forEach(form => form.addEventListener('submit', addTrackedItem));
+  $$('[data-tracked-save]', root).forEach(button => button.addEventListener('click', saveTrackedItem));
+  $$('[data-tracked-up]', root).forEach(button => button.addEventListener('click', event => moveTrackedItem(event, -1)));
+  $$('[data-tracked-down]', root).forEach(button => button.addEventListener('click', event => moveTrackedItem(event, 1)));
+}
+
+function applyTrackedItems(items) {
+  const selected = currentFlagSelections();
+  state.trackedItems = Array.isArray(items) ? items : [];
+  renderTrackedItems(selected);
+  renderTrackedSettings();
+}
+
+async function addTrackedItem(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  try {
+    const result = await api('/api/v1/tracked-items', { method: 'POST', body: JSON.stringify({ category: form.dataset.addTrackedCategory, label: form.elements.label.value }) });
+    applyTrackedItems(result.items); form.reset(); toast('Отметка добавлена');
+  } catch (error) { toast(`Не удалось добавить отметку: ${error.message}`); }
+}
+
+async function saveTrackedItem(event) {
+  const row = event.currentTarget.closest('[data-tracked-id]');
+  try {
+    const result = await api(`/api/v1/tracked-items/${encodeURIComponent(row.dataset.trackedId)}`, { method: 'PUT', body: JSON.stringify({ label: row.querySelector('[data-tracked-label]').value, active: row.querySelector('[data-tracked-active]').checked }) });
+    applyTrackedItems(result.items); toast('Отметка обновлена');
+  } catch (error) { toast(`Не удалось обновить отметку: ${error.message}`); }
+}
+
+async function moveTrackedItem(event, delta) {
+  const row = event.currentTarget.closest('[data-tracked-id]');
+  const category = event.currentTarget.closest('[data-settings-group]').dataset.settingsGroup;
+  const ids = state.trackedItems.filter(item => item.category === category).map(item => item.id);
+  const index = ids.indexOf(row.dataset.trackedId); const target = index + delta;
+  if (index < 0 || target < 0 || target >= ids.length) return;
+  [ids[index], ids[target]] = [ids[target], ids[index]];
+  try { const result = await api('/api/v1/tracked-items/order', { method: 'PUT', body: JSON.stringify({ category, ids }) }); applyTrackedItems(result.items); }
+  catch (error) { toast(`Не удалось изменить порядок: ${error.message}`); }
+}
+
 async function switchView(name) {
   if (name !== 'checkin' && !await confirmLeavingDirty()) return;
   $$('.view').forEach(view => view.classList.toggle('active', view.id === `view-${name}`));
@@ -124,6 +218,7 @@ function makeExtraDraftKey() {
 function resetForm({ kind = 'scheduled', period = 'day', date = localDate(), scheduledFor = null, observedAt = undefined } = {}) {
   const form = $('#checkin-form');
   state.suppressDirty = true;
+  renderTrackedItems({ context: [], symptoms: [], activation: [] });
   form.reset();
   state.currentKind = kind;
   state.currentPeriod = kind === 'scheduled' ? period : null;
@@ -139,6 +234,7 @@ function resetForm({ kind = 'scheduled', period = 'day', date = localDate(), sch
   scaleFields.forEach(name => setScale(form.elements[name], null));
   setFlags('context'); setFlags('symptoms'); setFlags('activation');
   state.currentRecord = null;
+  state.staleDraftFlags = [];
   state.dirty = false;
   $('#edit-state').textContent = kind === 'extra' ? 'Новая дополнительная запись' : 'Новая запись';
   $('#save-status').textContent = 'Изменения ещё не сохранены';
@@ -158,6 +254,7 @@ function fillForm(record) {
     scheduledFor: record.scheduledFor,
     observedAt: record.observedAt
   });
+  renderTrackedItems({ context: record.context, symptoms: record.symptoms, activation: record.activation });
   const form = $('#checkin-form');
   state.suppressDirty = true;
   state.currentRecord = record;
@@ -176,7 +273,7 @@ function fillForm(record) {
 function draftValues() {
   const form = $('#checkin-form');
   const values = Object.fromEntries(new FormData(form).entries());
-  values.context = selectedFlags('context'); values.symptoms = selectedFlags('symptoms'); values.activation = selectedFlags('activation');
+  Object.assign(values, buildDraftFlagValues({ context: selectedFlags('context'), symptoms: selectedFlags('symptoms'), activation: selectedFlags('activation') }, state.staleDraftFlags));
   values.scalesChosen = Object.fromEntries(scaleFields.map(name => [name, form.elements[name].dataset.chosen === 'true']));
   for (const name of scaleFields) values[name] = form.elements[name].value;
   return values;
@@ -200,6 +297,7 @@ function discardDraft() {
   clearTimeout(state.draftTimer);
   MedCheckinDrafts.remove(draftKey());
   if (state.currentKind === 'extra') localStorage.removeItem('med-checkin-extra-draft-key');
+  state.staleDraftFlags = [];
   state.dirty = false;
 }
 
@@ -209,11 +307,13 @@ function restoreDraft(draft) {
   for (const [name, value] of Object.entries(draft.values)) {
     if (form.elements[name] && !Array.isArray(value) && name !== 'scalesChosen') form.elements[name].value = value ?? '';
   }
+  state.staleDraftFlags = findStaleDraftFlags(draft.values);
   setFlags('context', draft.values.context); setFlags('symptoms', draft.values.symptoms); setFlags('activation', draft.values.activation);
   scaleFields.forEach(name => setScale(form.elements[name], draft.values.scalesChosen?.[name] ? draft.values[name] : null));
   state.suppressDirty = false;
   state.dirty = true;
   $('#save-status').textContent = 'Восстановлен черновик';
+  if (state.staleDraftFlags.length) toast('Черновик содержит неизвестные отметки после импорта. Отбрось черновик и начни запись заново.');
 }
 
 function chooseDialog(id, fallback) {
@@ -270,6 +370,7 @@ function formPayload() {
 }
 
 function validForSave(payload) {
+  if (state.staleDraftFlags.length) { toast('Отбрось черновик с неизвестными отметками и начни запись заново.'); return false; }
   if (payload.kind === 'scheduled' && scaleFields.some(name => payload[name] === null)) {
     toast('Для запланированного чек-ина выбери все восемь шкал.');
     return false;
@@ -422,16 +523,20 @@ async function loadHistory(append = false) {
 }
 
 function comparisonTable(rows, columns) { return `<table class="comparison-table"><thead><tr><th>Показатель</th>${columns.map(c => `<th>${c.label}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr><td>${row.label}</td>${columns.map(c => `<td>${round(c.values[row.key])}</td>`).join('')}</tr>`).join('')}</tbody></table>`; }
-async function loadAnalytics() {
-  const data = await api('/api/v1/analytics');
+function selectedTrendFields() { return $$('[data-trend-field]:checked').map(input => input.dataset.trendField); }
+function renderAnalytics(data) {
   $('#analytics-kpis').innerHTML = [['Запланированных', data.count], ['Дней', data.days], ['Среднее настроение', round(data.overall.mood)], ['Средняя тревога', round(data.overall.anxiety)]].map(([label, value]) => `<div class="kpi"><strong>${value}</strong><span>${label}</span></div>`).join('');
   const completion = data.completion;
   $('#completion-stats').innerHTML = `<h3>Выполнение расписания</h3><p class="muted">${completion.opportunities ? `${completion.completed} из ${completion.opportunities} прошедших или отмеченных заранее запланированных периодов (${round(completion.rate)}%)` : 'Пока нет прошедших запланированных периодов.'}</p>`;
-  ChartLite.renderTrend($('#trend-chart'), data.daily, data.treatmentMarkers);
+  ChartLite.renderTrend($('#trend-chart'), data.daily, data.treatmentMarkers, state.selectedTrendFields);
   const rows = ['mood', 'energy', 'focus', 'functioning', 'anxiety'].map(key => ({ key, label: metricLabels[key] }));
   $('#paired-comparison').innerHTML = data.pairedDays ? `<p class="muted" style="margin-bottom:10px">Средняя разница «вечер минус день» на ${data.pairedDays} парных днях.</p>${comparisonTable(rows, [{ label: 'Δ вечером', values: data.pairedDelta }])}` : '<div class="empty">Нужно несколько дней с обеими отметками.</div>';
-  const frequencyItems = Object.entries({ ...data.frequencies.symptoms, ...data.frequencies.activation, ...data.frequencies.context }).map(([key, value]) => ({ label: flagLabels[key] || key, value })).sort((a, b) => b.value - a.value).slice(0, 10);
+  const frequencyItems = Object.entries({ ...data.frequencies.symptoms, ...data.frequencies.activation, ...data.frequencies.context }).map(([key, value]) => ({ label: state.trackedItems.find(item => item.id === key)?.label || key, value })).sort((a, b) => b.value - a.value).slice(0, 10);
   ChartLite.renderBars($('#frequency-chart'), frequencyItems);
+}
+async function loadAnalytics() {
+  state.analyticsData = await api('/api/v1/analytics');
+  renderAnalytics(state.analyticsData);
 }
 
 function effectiveRegimen(date = localDate()) {
@@ -515,6 +620,7 @@ function renderReminderSettings() {
 async function fillSettings() {
   if (state.settings) for (const [key, value] of Object.entries(state.settings)) if ($('#settings-form').elements[key]) $('#settings-form').elements[key].value = value ?? '';
   renderReminderSettings();
+  renderTrackedSettings();
   await Promise.all([loadTreatmentEvents(), loadBackups()]);
 }
 async function saveSettings(event) {
@@ -564,7 +670,7 @@ async function replaceFromImport() {
     const result = await api('/api/v1/import/replace', { method: 'POST', body: JSON.stringify(state.pendingImport) });
     state.pendingImport = null; $('#replace-import').disabled = true; $('#import-json').value = '';
     $('#import-preview').textContent = `Заменено наблюдений: ${result.observationCount}. Резервная копия создана.`;
-    MedCheckinDrafts.remove(draftKey()); state.dirty = false;
+    MedCheckinDrafts.remove(draftKey()); state.staleDraftFlags = []; state.dirty = false;
     toast('Данные заменены из JSON'); setTimeout(() => window.location.reload(), 400);
   } catch (error) { toast(`Не удалось заменить данные: ${error.message}`); }
 }
@@ -582,21 +688,26 @@ async function handleReminder(due) {
 }
 function connectEvents() {
   state.eventSource?.close(); const stream = new EventSource(`${state.apiBase}/api/v1/events?token=${encodeURIComponent(state.token)}`); state.eventSource = stream;
-  stream.addEventListener('connected', () => setConnection(true)); stream.addEventListener('reminder', event => handleReminder(JSON.parse(event.data))); stream.addEventListener('settings-changed', event => { state.settings = JSON.parse(event.data); fillSettings(); }); stream.addEventListener('quit', () => window.close()); stream.onerror = () => setConnection(false);
+  stream.addEventListener('connected', () => setConnection(true)); stream.addEventListener('reminder', event => handleReminder(JSON.parse(event.data))); stream.addEventListener('settings-changed', event => { state.settings = JSON.parse(event.data); fillSettings(); }); stream.addEventListener('update-state', event => { state.updates = JSON.parse(event.data); renderUpdates(); }); stream.addEventListener('quit', () => window.close()); stream.onerror = () => setConnection(false);
 }
 function initBrowser() { const runtime = MedCheckinStartup.applyBrowserRuntime(window); if (!runtime.token) throw new Error('Отсутствует локальный ключ запуска. Открой приложение через ярлык или значок в трее.'); state.token = runtime.token; state.apiBase = runtime.apiBase; connectEvents(); return runtime; }
 async function bootstrap(runtime) {
-  const data = await api('/api/v1/bootstrap'); state.settings = data.settings; $('#medication-label').textContent = data.currentTreatment?.regimen?.map(item => `${item.name} ${item.amount} ${item.unit}`).join(' · ') || 'Лечение не указано';
+  const data = await api('/api/v1/bootstrap'); state.settings = data.settings; state.updates = data.updates; applyTrackedItems(data.trackedItems || []); state.selectedTrendFields = selectedTrendFields().length ? selectedTrendFields() : trendDefaults; $('#medication-label').textContent = data.currentTreatment?.regimen?.map(item => `${item.name} ${item.amount} ${item.unit}`).join(' · ') || 'Лечение не указано'; renderUpdates();
   await loadCheckin(runtime.localDate || data.current.localDate, runtime.slot ? slotPeriod(runtime.slot) : data.current.period); fillSettings(); setConnection(true); await switchView(runtime.view || 'checkin');
 }
 function wireUi() {
   setRanges();
+  $$('[data-trend-field]').forEach(input => input.addEventListener('change', () => {
+    state.selectedTrendFields = selectedTrendFields();
+    if (state.analyticsData) renderAnalytics(state.analyticsData);
+  }));
   $$('.tab').forEach(button => button.addEventListener('click', () => switchView(button.dataset.view)));
   $$('[data-entry-kind]').forEach(button => button.addEventListener('click', () => startEntry(button.dataset.entryKind, button.dataset.period || null)));
   $('#checkin-form').addEventListener('submit', saveCheckin); $('#checkin-form').addEventListener('change', markDirty); $('#checkin-form').addEventListener('input', event => { if (event.target.type !== 'range') markDirty(); });
   $('#use-previous-values').addEventListener('click', usePreviousValues); $('#hide-window').addEventListener('click', closeWindow); $('#refresh-history').addEventListener('click', () => loadHistory()); $('#add-missed-checkin').addEventListener('click', addMissedCheckin); $('#add-extra-from-history').addEventListener('click', () => startEntry('extra')); $('#load-more-history').addEventListener('click', () => loadHistory(true));
   ['history-range', 'history-period', 'history-from', 'history-to'].forEach(id => $(`#${id}`).addEventListener('change', event => { if (id !== 'history-range' && id !== 'history-period') $('#history-range').value = 'custom'; loadHistory(); }));
   $('#refresh-analytics').addEventListener('click', loadAnalytics); $('#settings-form').addEventListener('submit', saveSettings);
+  $('#check-updates').addEventListener('click', checkUpdates); $('#install-update').addEventListener('click', installUpdate); $('#update-available').addEventListener('click', () => switchView('settings'));
   $('#add-treatment-event').addEventListener('click', () => openTreatmentForm()); $('#treatment-event-form').addEventListener('submit', saveTreatmentEvent); $('#cancel-treatment-event').addEventListener('click', () => { $('#treatment-event-form').hidden = true; });
   $('#add-treatment-medication').addEventListener('click', () => { const regimen = treatmentFormRegimen(); regimen.push({ name: '', amount: '', unit: 'mg', timing: '' }); renderRegimenFields(regimen); });
   $('#treatment-event-form').elements.effectiveDate.addEventListener('change', event => { if (!$('#treatment-event-form').dataset.editing && event.target.value) renderRegimenFields(effectiveRegimen(dateDaysBefore(event.target.value, 1))); });

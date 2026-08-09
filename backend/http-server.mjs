@@ -125,7 +125,7 @@ export function createEventHub() {
   };
 }
 
-export function createHttpServer({ repo, token, dataDir, resourcesDir = null, hostActions = null, maintenance = null, now = () => new Date(), eventHub = createEventHub(), onControl = async () => {}, onPersisted = async () => {} }) {
+export function createHttpServer({ repo, token, dataDir, resourcesDir = null, hostActions = null, maintenance = null, updateService = null, now = () => new Date(), eventHub = createEventHub(), onControl = async () => {}, onPersisted = async () => {} }) {
   const resourceRoot = resolveResourceRoot(resourcesDir);
   let server;
   let port = null;
@@ -186,10 +186,46 @@ export function createHttpServer({ repo, token, dataDir, resourcesDir = null, ho
       const period = slot === '13:00' ? 'day' : 'evening';
       return json(res, 200, {
         settings: repo.getSettings(),
+        trackedItems: repo.listTrackedItems(),
+        updates: updateService?.getStatus() ?? null,
         current: { localDate, period, checkin: repo.getScheduledCheckin(localDate, period) },
         recent: repo.listCheckins({ limit: 6 }),
         currentTreatment: repo.getEffectiveTreatment(localDate)
       });
+    }
+
+    if (url.pathname === '/api/v1/updates' && req.method === 'GET') {
+      return json(res, 200, updateService?.getStatus() ?? { available: false });
+    }
+    if (url.pathname === '/api/v1/updates/check' && req.method === 'POST') {
+      if (!updateService) return json(res, 503, { error: 'updates_unavailable' });
+      return json(res, 200, await updateService.check({ force: true }));
+    }
+    if (url.pathname === '/api/v1/updates/install' && req.method === 'POST') {
+      if (!updateService) return json(res, 503, { error: 'updates_unavailable' });
+      return json(res, 200, await updateService.installAvailable());
+    }
+
+    if (url.pathname === '/api/v1/tracked-items' && req.method === 'POST') {
+      repo.createTrackedItem(await readBody(req));
+      await onPersisted();
+      return json(res, 201, { items: repo.listTrackedItems() });
+    }
+
+    if (url.pathname === '/api/v1/tracked-items/order' && req.method === 'PUT') {
+      const body = await readBody(req);
+      repo.reorderTrackedItems(body.category, body.ids);
+      await onPersisted();
+      return json(res, 200, { items: repo.listTrackedItems() });
+    }
+
+    const trackedItemId = url.pathname.match(/^\/api\/v1\/tracked-items\/([^/]+)$/);
+    if (trackedItemId && req.method === 'PUT') {
+      let id;
+      try { id = decodeURIComponent(trackedItemId[1]); } catch { return json(res, 400, { error: 'invalid_tracked_item_id' }); }
+      if (!repo.updateTrackedItem(id, await readBody(req))) return json(res, 404, { error: 'not_found' });
+      await onPersisted();
+      return json(res, 200, { items: repo.listTrackedItems() });
     }
 
     if (url.pathname === '/api/v1/checkins' && req.method === 'POST') {

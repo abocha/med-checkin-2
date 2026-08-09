@@ -2,21 +2,11 @@ export const SCALE_FIELDS = [
   'mood', 'anxiety', 'irritability', 'energy', 'focus',
   'functioning', 'sleepQuality', 'appetite'
 ];
+import { BUILTIN_TRACKED_ITEMS, trackedIdsForCategory } from './tracked-items.mjs';
 
-export const CONTEXT_FIELDS = [
-  'caffeine', 'stress', 'conflict', 'illnessPain',
-  'physicalActivity', 'positiveProductiveDay'
-];
-
-export const SYMPTOM_FIELDS = [
-  'dizziness', 'headache', 'nausea', 'sweating', 'palpitations',
-  'brainZaps', 'unusualDreams', 'crying'
-];
-
-export const ACTIVATION_FIELDS = [
-  'reducedSleepNeed', 'racingThoughts', 'talkativeness',
-  'innerMotor', 'impulsivity', 'elevatedAgitated'
-];
+export const CONTEXT_FIELDS = Object.freeze([...trackedIdsForCategory(BUILTIN_TRACKED_ITEMS, 'context')]);
+export const SYMPTOM_FIELDS = Object.freeze([...trackedIdsForCategory(BUILTIN_TRACKED_ITEMS, 'symptoms')]);
+export const ACTIVATION_FIELDS = Object.freeze([...trackedIdsForCategory(BUILTIN_TRACKED_ITEMS, 'activation')]);
 
 export const DEFAULT_SETTINGS = Object.freeze({
   dayTime: '13:00',
@@ -43,10 +33,11 @@ function optionalHours(value) {
   return Math.round(number * 10) / 10;
 }
 
-function normalizeFlags(values, allowed) {
+function normalizeFlags(values, trackedItems, category) {
   if (!Array.isArray(values)) return [];
-  const allowedSet = new Set(allowed);
-  return [...new Set(values.filter((value) => allowedSet.has(value)))];
+  const allowedSet = trackedIdsForCategory(trackedItems, category);
+  if (values.some((value) => typeof value !== 'string' || !allowedSet.has(value))) throw new TypeError(`Invalid ${category}`);
+  return [...new Set(values)];
 }
 
 function normalizeText(value, maxLength = 8000) {
@@ -70,7 +61,7 @@ function normalizeTimestamp(value, field, { nullable = false } = {}) {
   return value;
 }
 
-export function normalizeCheckin(input = {}, { allowMissingObservedAt = false } = {}) {
+export function normalizeCheckin(input = {}, { allowMissingObservedAt = false, trackedItems = BUILTIN_TRACKED_ITEMS } = {}) {
   if (!isLocalDate(input.localDate)) throw new TypeError('Invalid localDate');
 
   const kind = input.kind;
@@ -89,9 +80,9 @@ export function normalizeCheckin(input = {}, { allowMissingObservedAt = false } 
     daySleepHours: optionalHours(input.daySleepHours),
     sleepStart: /^\d{2}:\d{2}$/.test(input.sleepStart ?? '') ? input.sleepStart : null,
     wakeTime: /^\d{2}:\d{2}$/.test(input.wakeTime ?? '') ? input.wakeTime : null,
-    context: normalizeFlags(input.context, CONTEXT_FIELDS),
-    symptoms: normalizeFlags(input.symptoms, SYMPTOM_FIELDS),
-    activation: normalizeFlags(input.activation, ACTIVATION_FIELDS),
+    context: normalizeFlags(input.context, trackedItems, 'context'),
+    symptoms: normalizeFlags(input.symptoms, trackedItems, 'symptoms'),
+    activation: normalizeFlags(input.activation, trackedItems, 'activation'),
     notes: normalizeText(input.notes),
     redFlags: normalizeText(input.redFlags)
   };

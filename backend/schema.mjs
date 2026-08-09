@@ -1,25 +1,29 @@
-export const LATEST_SCHEMA_VERSION = 1;
+import { BUILTIN_TRACKED_ITEMS } from './tracked-items.mjs';
 
-export const KNOWN_TREATMENT_EVENTS = Object.freeze([
-  {
-    effectiveDate: null,
-    regimen: [
-      { name: 'Escitalopram', amount: 20, unit: 'mg', timing: null },
-      { name: 'Atomoxetine', amount: 80, unit: 'mg', timing: null }
-    ],
-    note: 'Known baseline before 2026-07-07'
-  },
-  {
-    effectiveDate: '2026-07-07',
-    regimen: [
-      { name: 'Escitalopram', amount: 10, unit: 'mg', timing: null },
-      { name: 'Atomoxetine', amount: 80, unit: 'mg', timing: null }
-    ],
-    note: ''
+export const LATEST_SCHEMA_VERSION = 2;
+
+export function createTrackedItemsSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tracked_items (
+      id TEXT PRIMARY KEY,
+      category TEXT NOT NULL CHECK(category IN ('context','symptoms','activation')),
+      label TEXT NOT NULL,
+      active INTEGER NOT NULL CHECK(active IN (0,1)),
+      sort_order INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS tracked_items_category_order
+      ON tracked_items(category, sort_order, id);
+  `);
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO tracked_items(id, category, label, active, sort_order)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  for (const item of BUILTIN_TRACKED_ITEMS) {
+    insert.run(item.id, item.category, item.label, Number(item.active), item.sortOrder);
   }
-]);
+}
 
-export function createLatestSchema(db, { setUserVersion = true, seedAt = new Date().toISOString() } = {}) {
+export function createLatestSchema(db, { setUserVersion = true } = {}) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS checkins (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,16 +70,6 @@ export function createLatestSchema(db, { setUserVersion = true, seedAt = new Dat
     CREATE UNIQUE INDEX IF NOT EXISTS treatment_events_single_baseline
       ON treatment_events((1)) WHERE effective_date IS NULL;
   `);
-
-  const count = db.prepare('SELECT COUNT(*) AS count FROM treatment_events').get().count;
-  if (count === 0) {
-    const insert = db.prepare(`
-      INSERT INTO treatment_events(effective_date, regimen_json, note, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-    `);
-    for (const event of KNOWN_TREATMENT_EVENTS) {
-      insert.run(event.effectiveDate, JSON.stringify(event.regimen), event.note, seedAt, seedAt);
-    }
-  }
+  createTrackedItemsSchema(db);
   if (setUserVersion) db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION}`);
 }
