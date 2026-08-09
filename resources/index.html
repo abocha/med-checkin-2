@@ -73,16 +73,7 @@
             </div>
             <div class="button-row scale-actions"><button type="button" class="secondary" id="use-previous-values">Использовать предыдущие значения</button><span id="scale-guidance" class="muted">0 — совсем нет / хуже всего · 10 — максимально / лучше всего</span></div>
 
-            <div class="scale-grid">
-              <label class="scale-row"><span>Настроение</span><input type="range" name="mood" min="0" max="10" step="1"><output>—</output></label>
-              <label class="scale-row"><span>Тревога</span><input type="range" name="anxiety" min="0" max="10" step="1"><output>—</output></label>
-              <label class="scale-row"><span>Раздражительность</span><input type="range" name="irritability" min="0" max="10" step="1"><output>—</output></label>
-              <label class="scale-row"><span>Энергия</span><input type="range" name="energy" min="0" max="10" step="1"><output>—</output></label>
-              <label class="scale-row"><span>Концентрация</span><input type="range" name="focus" min="0" max="10" step="1"><output>—</output></label>
-              <label class="scale-row"><span>Функционирование</span><input type="range" name="functioning" min="0" max="10" step="1"><output>—</output></label>
-              <label class="scale-row"><span>Качество сна</span><input type="range" name="sleepQuality" min="0" max="10" step="1"><output>—</output></label>
-              <label class="scale-row"><span>Аппетит</span><input type="range" name="appetite" min="0" max="10" step="1"><output>—</output></label>
-            </div>
+            <div id="scale-inputs" class="scale-grid"></div>
           </section>
 
           <section class="card observation-card">
@@ -148,16 +139,7 @@
         <div class="view-heading"><div><p class="eyebrow">описательная аналитика</p><h2>Что меняется со временем</h2><p class="muted">Графики показывают рисунок данных, но не доказывают причину изменений.</p></div><button type="button" class="secondary" id="refresh-analytics">Пересчитать</button></div>
         <div id="analytics-kpis" class="kpi-grid"></div>
         <section id="completion-stats" class="card"></section>
-        <section class="card chart-card"><div class="section-heading"><div><h3>Основные показатели</h3><p>Ежедневные средние и трёхдневное сглаживание.</p></div></div><div id="trend-fields" class="trend-fields" role="group" aria-label="Показатели графика">
-          <label><input type="checkbox" data-trend-field="mood" checked> Настроение</label>
-          <label><input type="checkbox" data-trend-field="anxiety"> Тревога</label>
-          <label><input type="checkbox" data-trend-field="irritability"> Раздражительность</label>
-          <label><input type="checkbox" data-trend-field="energy" checked> Энергия</label>
-          <label><input type="checkbox" data-trend-field="focus" checked> Концентрация</label>
-          <label><input type="checkbox" data-trend-field="functioning" checked> Функционирование</label>
-          <label><input type="checkbox" data-trend-field="sleepQuality"> Качество сна</label>
-          <label><input type="checkbox" data-trend-field="appetite"> Аппетит</label>
-        </div><div id="trend-chart" class="chart"></div></section>
+        <section class="card chart-card"><div class="section-heading"><div><h3>Основные показатели</h3><p>Ежедневные средние и трёхдневное сглаживание.</p></div></div><div id="trend-fields" class="trend-fields" role="group" aria-label="Показатели графика"></div><div id="trend-chart" class="chart"></div></section>
         <div class="two-column">
           <section class="card"><h3>Днём и вечером</h3><div id="paired-comparison"></div></section>
           <section class="card"><h3>Частые отметки</h3><div id="frequency-chart"></div></section>
@@ -175,6 +157,7 @@
           </div>
           <div class="button-row"><button type="submit" class="primary">Сохранить настройки</button><button type="button" class="secondary" id="pause-two-hours">Пауза на 2 часа</button><button type="button" class="ghost" id="resume-reminders">Возобновить</button></div>
         </form>
+        <section class="card scale-definitions-card"><div class="section-heading"><div><h3>Шкалы</h3><p>Переименуй, архивируй или верни шкалы. Старые записи сохраняют значения по их постоянным идентификаторам.</p></div></div><div id="scale-definitions-settings" class="scale-definitions-settings"></div></section>
         <section class="card treatment-card">
           <div class="section-heading"><div><h3>Лечение</h3><p>Полный снимок схемы на дату изменения.</p></div><button type="button" class="secondary" id="add-treatment-event">Добавить изменение</button></div>
           <p id="current-regimen" class="muted"></p>
