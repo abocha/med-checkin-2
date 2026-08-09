@@ -41,7 +41,7 @@ This is a patch release: **2.4.1**.
 4. A bounded acknowledgement timeout so a drained/lost host action does not leave the updater permanently stuck.
 5. Retry after installer-launch failure or acknowledgement timeout.
 6. 2.4.1 version/release metadata and updater documentation.
-7. Automated regression coverage plus one real-Windows updater smoke before release.
+7. Automated regression coverage plus one real-Windows updater smoke immediately after 2.4.1 is published and visible to the existing 2.4.0 updater.
 
 ### Non-goals
 
@@ -256,13 +256,14 @@ git diff --check
 
 CI must pass on `windows-latest` / Node 22.23.1.
 
-Before releasing 2.4.1, perform one real-Windows updater smoke from 2.4.0:
+Because the production updater is deliberately hard-wired to the official repository’s latest **public stable** release, a true end-to-end 2.4.0 -> 2.4.1 updater smoke cannot see a draft or prerelease. The release sequence is therefore:
 
-1. open Settings and click Check;
-2. verify a known current/no-update state shows positive confirmation where applicable;
-3. with 2.4.1 published as the newer release, verify `available -> downloading -> launching -> installing` is visibly understandable;
-4. verify the old app closes as the installer takes over;
-5. verify Med Check-in relaunches as 2.4.1 with existing local data intact.
+1. finish code review, full tests, packaging, and Windows CI;
+2. publish 2.4.1 as the latest stable release with its ZIP and SHA-256 asset;
+3. immediately exercise the updater from an installed 2.4.0 instance;
+4. only consider the release finalized after that smoke passes.
+
+The smoke must verify `available -> downloading -> launching -> installing`, old-window handoff, automatic relaunch as 2.4.1, and preserved local data. If the post-publication smoke fails, stop further rollout/announcement and fix forward; do not improvise destructive recovery against the user’s data.
 
 A synthetic tray-launch failure can remain automated/static where practical; do not deliberately break the user’s real installation to exercise it.
 
@@ -284,6 +285,11 @@ Keep stable Windows identities stable:
 - shortcut family remains `Med Check-in 2.4`;
 - tray display may remain `Med Check-in 2.4`.
 
+Preserve the repository’s existing Windows script encoding contracts while editing release/updater files:
+
+- `windows/install.ps1` and the bootstrap scripts remain ASCII-safe with CRLF line endings;
+- `windows/tray-host.ps1` remains UTF-8 with BOM.
+
 No database or portable-data version changes are involved.
 
 ## Orchestration
@@ -298,7 +304,7 @@ Keep one final coherent Terra whole-branch review only if both boundaries are de
 
 ## Acceptance criteria
 
-2.4.1 is ready for release when all of the following are true:
+2.4.1 is ready to be considered finalized when all of the following are true:
 
 - pressing Check and finding no newer release produces an explicit positive “latest version” message;
 - pressing Update never makes the card silently revert to an idle-looking timestamp while work is in progress;
@@ -308,5 +314,6 @@ Keep one final coherent Terra whole-branch review only if both boundaries are de
 - failed/unconfirmed launch restores a retryable candidate and visible error;
 - pending launch blocks conflicting check/install operations;
 - SHA-256 verification and existing installer/data-preservation behavior remain unchanged;
-- focused tests, full `npm test`, Windows packaging, `git diff --check`, Windows CI, and the real 2.4.0 -> 2.4.1 updater smoke pass;
+- focused tests, full `npm test`, Windows packaging, `git diff --check`, and Windows CI pass before publication;
+- immediately after 2.4.1 becomes the latest public stable release, the real 2.4.0 -> 2.4.1 updater smoke passes before the release is considered finalized;
 - no unrelated product or persistence behavior changes.
