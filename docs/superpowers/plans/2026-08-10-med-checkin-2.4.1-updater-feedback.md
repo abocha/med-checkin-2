@@ -13,36 +13,38 @@
 - Release version is exactly `2.4.1`.
 - No new dependencies.
 - Update discovery/download remains fixed to the official GitHub repository.
-- Existing SHA-256 verification must remain before extraction/installer launch.
+- Existing SHA-256 verification remains before extraction/installer launch.
 - `%LOCALAPPDATA%\MedCheckin2` remains preserved by update/install behavior.
 - Scheduled-task identities remain `Med Check-in 2.0` and `Med Check-in 2.0 Watchdog`.
-- Shortcut/tray family naming may remain `Med Check-in 2.4`.
+- Shortcut/tray family naming remains `Med Check-in 2.4` unless an existing exact patch string requires otherwise.
 - No database/schema/portable-format changes.
 - Do not persist updater jobs or add a helper service/process.
 - `phase` is authoritative for browser presentation.
 - A queued host action is not proof of installer launch.
-- A failed or unconfirmed installer launch must leave the candidate retryable.
+- A failed or unconfirmed installer launch leaves the candidate retryable.
+- Preserve Windows script encoding contracts: bootstrap scripts including `windows/install.ps1` stay ASCII-safe CRLF; `windows/tray-host.ps1` stays UTF-8 with BOM.
 - Run focused tests, then the cheap full `npm test` gate before expensive review.
-- Do not test destructive updater behavior against the user’s real data automatically.
+- Do not automatically exercise destructive updater behavior against the user’s real data.
 
 ---
 
-## Repository map for this change
+## Repository Map
 
 **Updater state and staging**
-- `backend/updates.mjs`: release discovery, candidate lifecycle, verified download/extraction, install mutual exclusion, status publication.
-- `test/updates.test.mjs`: updater state/concurrency regression coverage.
+- `backend/updates.mjs`
+- `test/updates.test.mjs`
 
 **Tray acknowledgement transport**
-- `backend/http-server.mjs`: fixed authenticated acknowledgement route.
-- `test/http-server.test.mjs`: route validation and delegation coverage.
-- `windows/tray-host.ps1`: existing `install-update` action consumer and `Start-Process` call.
-- `test/package-layout.test.mjs`: appropriate static contract checks for shipped PowerShell where a live process test is not practical.
+- `backend/http-server.mjs`
+- `windows/tray-host.ps1`
+- `test/http-server.test.mjs`
+- `test/package-layout.test.mjs`
 
 **Browser presentation**
-- `resources/app.js`: `renderUpdates()`, `checkUpdates()`, `installUpdate()`, SSE handling.
-- `resources/index.html`: update card and exact document version.
-- `test/frontend-smoke.test.mjs`: static shipped UI contract; add a small focused updater-rendering test hook/test if needed rather than a framework.
+- `resources/app.js`
+- `resources/index.html`
+- `test/frontend-smoke.test.mjs`
+- Create: `test/frontend-updates.test.mjs`
 
 **Patch release integration**
 - `package.json`
@@ -51,34 +53,42 @@
 - `windows/install.ps1`
 - `scripts/package-windows.mjs`
 - `scripts/verify-release.mjs`
-- version-sensitive tests discovered from the suite.
 
-The map is current as of the approved 2.4.1 design. Skip a broad explorer pass unless these ownership seams have materially drifted.
+The map is fresh. Skip a broad explorer pass unless implementation reveals material drift.
 
 ---
 
-### Task 1: Make installer launch an acknowledged updater state transition
+### Task 1: Acknowledge installer launch instead of treating queueing as success
 
-**Ownership boundary:** integration-heavy updater/process coordination. If delegated, prefer `terra_workhorse`. After focused + full tests, use `sol_reviewer` narrowly on candidate lifetime, acknowledgement identity, timeout/retry, and check/install mutual exclusion.
+**Ownership boundary:** updater/process coordination. If delegated, prefer `terra_workhorse`. After focused tests and `npm test`, use `sol_reviewer` narrowly on candidate lifetime, action identity, timeout/retry, and check/install mutual exclusion.
 
 **Files:**
 - Modify: `backend/updates.mjs`
 - Modify: `backend/http-server.mjs`
 - Modify: `windows/tray-host.ps1`
-- Test: `test/updates.test.mjs`
-- Test: `test/http-server.test.mjs`
-- Test: `test/package-layout.test.mjs`
+- Modify: `test/updates.test.mjs`
+- Modify: `test/http-server.test.mjs`
+- Modify: `test/package-layout.test.mjs`
 
 **Interfaces:**
-- Existing `createUpdateService({...})` continues to produce `getStatus()`, `check()`, `installAvailable()`.
-- Extend it with `reportInstallLaunch({ actionId, ok })`.
-- Add optional construction input `launchAckTimeoutMs = 15000` for deterministic timeout tests; production callers rely on the default.
-- Queued host action shape becomes `{ type: 'install-update', actionId, stagingDir }`.
-- Add authenticated fixed endpoint `POST /api/v1/updates/install-launch-result` with `{ actionId: string, ok: boolean }`.
+- `createUpdateService({...})` continues to expose `getStatus()`, `check()`, `installAvailable()`.
+- Add `reportInstallLaunch({ actionId, ok })`.
+- Add optional `launchAckTimeoutMs = 15000` construction input for deterministic timeout tests.
+- Queued action becomes `{ type: 'install-update', actionId, stagingDir }`.
+- Add `POST /api/v1/updates/install-launch-result` with exact body `{ actionId: string, ok: boolean }`.
 
-- [ ] **Step 1: Change the updater tests first to express the new state contract**
+- [ ] **Step 1: Change the updater tests to the new state contract**
 
-In `test/updates.test.mjs`, update the successful staging test so it no longer expects staging alone to mean installation started. The assertions should have this shape:
+In `test/updates.test.mjs`, change successful no-update checks to expect `current`:
+
+```js
+const status = await f.service.check({ force: true });
+assert.equal(status.phase, 'current');
+assert.equal(status.availableVersion, null);
+assert.equal(status.error, null);
+```
+
+Change the successful staging test so staging means `launching`, not `installing`:
 
 ```js
 await f.service.check({ force: true });
@@ -97,18 +107,11 @@ assert.equal(installing.phase, 'installing');
 assert.equal(installing.availableVersion, '2.3.1');
 ```
 
-Also change the no-newer-release expectations from `idle` to `current` after a successful check:
+- [ ] **Step 2: Add failing tests for launch failure, timeout, stale IDs, and pending-launch exclusion**
 
-```js
-const status = await f.service.check({ force: true });
-assert.equal(status.phase, 'current');
-assert.equal(status.availableVersion, null);
-assert.equal(status.error, null);
-```
+Extend the existing fixture to accept `launchAckTimeoutMs` and pass it to `createUpdateService()`.
 
-- [ ] **Step 2: Add focused failing tests for negative acknowledgement, timeout, stale IDs, and pending-launch exclusion**
-
-Add tests equivalent to:
+Add:
 
 ```js
 test('failed installer launch restores the candidate and permits retry', async () => {
@@ -121,7 +124,7 @@ test('failed installer launch restores the candidate and permits retry', async (
     const failed = f.service.reportInstallLaunch({ actionId: action.actionId, ok: false });
     assert.equal(failed.phase, 'available');
     assert.equal(failed.availableVersion, '2.3.1');
-    assert.match(failed.error, /launch|installer|запуст/i);
+    assert.ok(failed.error);
 
     const retry = await f.service.installAvailable();
     assert.equal(retry.phase, 'launching');
@@ -138,19 +141,20 @@ test('pending installer launch blocks checks and duplicate install attempts', as
     const requestsBefore = f.requested.length;
 
     await f.service.check({ force: true });
-    assert.equal(f.requested.length, requestsBefore, 'pending launch must not refetch metadata');
+    assert.equal(f.requested.length, requestsBefore);
     await assert.rejects(f.service.installAvailable(), /already|launch|install/i);
   } finally { f.close(); }
 });
 ```
 
 ```js
-test('stale installer launch acknowledgement cannot mutate the current candidate', async () => {
+test('stale installer acknowledgement cannot mutate updater state', async () => {
   const f = fixture();
   try {
     await f.service.check({ force: true });
     await f.service.installAvailable();
     const before = f.service.getStatus();
+
     assert.throws(
       () => f.service.reportInstallLaunch({ actionId: 'stale-action', ok: true }),
       /action|launch/i
@@ -160,22 +164,25 @@ test('stale installer launch acknowledgement cannot mutate the current candidate
 });
 ```
 
-For timeout, build the fixture with a tiny injected timeout and wait only enough for that test:
-
 ```js
-const f = fixture({ launchAckTimeoutMs: 10 });
-await f.service.check({ force: true });
-await f.service.installAvailable();
-await new Promise((resolve) => setTimeout(resolve, 25));
-const status = f.service.getStatus();
-assert.equal(status.phase, 'available');
-assert.equal(status.availableVersion, '2.3.1');
-assert.match(status.error, /confirm|launch|запуск/i);
+test('unacknowledged installer launch times out to a retryable candidate', async () => {
+  const f = fixture({ launchAckTimeoutMs: 10 });
+  try {
+    await f.service.check({ force: true });
+    await f.service.installAvailable();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const status = f.service.getStatus();
+    assert.equal(status.phase, 'available');
+    assert.equal(status.availableVersion, '2.3.1');
+    assert.ok(status.error);
+  } finally { f.close(); }
+});
 ```
 
-Update the fixture so `launchAckTimeoutMs` is passed through to `createUpdateService()`.
+Keep both existing install→check and check→install interleaving tests.
 
-- [ ] **Step 3: Run the updater tests and confirm the new expectations fail for the intended reasons**
+- [ ] **Step 3: Run updater tests and verify the new tests fail before implementation**
 
 Run:
 
@@ -183,11 +190,11 @@ Run:
 node --test --test-concurrency=1 test/updates.test.mjs
 ```
 
-Expected before implementation: failures around `current`, `launching`, missing `actionId`, missing `reportInstallLaunch`, and pending-launch/timeout behavior. Do not weaken old interleaving assertions.
+Expected before implementation: failures around `current`, `launching`, missing `actionId`, missing `reportInstallLaunch`, and pending-launch behavior.
 
-- [ ] **Step 4: Implement the minimal pending-launch state in `backend/updates.mjs`**
+- [ ] **Step 4: Implement `pendingLaunch` in `backend/updates.mjs`**
 
-Use native `randomUUID` in the existing crypto import:
+Extend the crypto import:
 
 ```js
 import { createHash, randomUUID } from 'node:crypto';
@@ -208,24 +215,13 @@ export function createUpdateService({
 }) {
 ```
 
-Add state owned entirely by the service:
+Add:
 
 ```js
 let pendingLaunch = null;
 ```
 
-A pending record should contain only what this lifecycle needs:
-
-```js
-{
-  actionId,
-  release,
-  stagingDir,
-  timer
-}
-```
-
-After a successful check with no newer compatible release, publish `phase: 'current'` instead of `idle`:
+For a successful check with no newer compatible release, publish:
 
 ```js
 return publish({
@@ -237,14 +233,13 @@ return publish({
 });
 ```
 
-When verified staging succeeds, **do not clear `candidate`**. Create an opaque action ID, enqueue it, arm the acknowledgement timer, and publish `launching`:
+After ZIP/checksum verification and extraction succeed, keep `candidate`, create the action ID, queue it, and arm the timeout:
 
 ```js
 const actionId = randomUUID();
 hostActions.enqueue({ type: 'install-update', actionId, stagingDir });
 
 const timer = setTimeout(() => {
-  // Only expire the still-current pending action.
   if (pendingLaunch?.actionId !== actionId) return;
   rmSync(stagingDir, { recursive: true, force: true });
   pendingLaunch = null;
@@ -256,8 +251,8 @@ const timer = setTimeout(() => {
   });
 }, launchAckTimeoutMs);
 timer.unref?.();
-pendingLaunch = { actionId, release, stagingDir, timer };
 
+pendingLaunch = { actionId, release, stagingDir, timer };
 return publish({
   phase: 'launching',
   availableVersion: release.version,
@@ -266,29 +261,32 @@ return publish({
 });
 ```
 
-Do not rely on exact English copy above if existing backend errors use a different language; keep backend error meaning stable and let browser copy remain user-friendly. The important contract is retryable `available` + non-null error.
+Do not clear `candidate` merely because the action was queued.
 
-Guard both conflicting operations beyond the staging promise:
+Block both operations while a launch is pending or already acknowledged:
 
 ```js
-if (pendingLaunch || status.phase === 'installing') {
-  // check(): return current status without fetching
+if (installation || pendingLaunch || status.phase === 'installing') {
+  // check(): return current status without a metadata fetch
 }
 ```
 
-and:
-
 ```js
-if (pendingLaunch || status.phase === 'installing') {
-  throw new Error('Update installation is already being launched.');
+if (installation || pendingLaunch || status.phase === 'installing') {
+  throw new Error('Update installation is already being prepared or launched.');
 }
 ```
 
-Implement acknowledgement with exact action identity:
+Preserve the existing `checking` exclusion as well.
+
+Implement exact acknowledgement identity:
 
 ```js
 function reportInstallLaunch({ actionId, ok }) {
-  if (!pendingLaunch || typeof actionId !== 'string' || actionId !== pendingLaunch.actionId || typeof ok !== 'boolean') {
+  if (!pendingLaunch
+      || typeof actionId !== 'string'
+      || actionId !== pendingLaunch.actionId
+      || typeof ok !== 'boolean') {
     throw new TypeError('Invalid or stale update launch acknowledgement');
   }
 
@@ -315,38 +313,40 @@ function reportInstallLaunch({ actionId, ok }) {
 }
 ```
 
-Return it from the service:
+Return it:
 
 ```js
 return { getStatus, check, installAvailable, reportInstallLaunch };
 ```
 
-Do **not** add persistence for candidate or pending launch. Do **not** remove SHA-256 verification or move installer launch into Node.
+Do not persist `candidate`/`pendingLaunch`, move installer launch into Node, or alter checksum verification.
 
-- [ ] **Step 5: Run updater tests until the state/concurrency contract passes**
-
-Run:
+- [ ] **Step 5: Run updater tests to green**
 
 ```text
 node --test --test-concurrency=1 test/updates.test.mjs
 ```
 
-Expected: all updater tests pass, including both existing check/install interleavings and the new pending-launch tests.
+Expected: PASS, including both existing interleaving tests.
 
-- [ ] **Step 6: Write failing HTTP tests for the fixed acknowledgement endpoint**
+- [ ] **Step 6: Add failing HTTP route tests**
 
-In `test/http-server.test.mjs`, construct a lightweight `updateService` spy/stub for the route test. Cover successful delegation and malformed/stale service rejection. The core successful assertion should be equivalent to:
+In `test/http-server.test.mjs`, add a route test with a stub service:
 
 ```js
 const acknowledgements = [];
 const updateService = {
   getStatus: () => ({ installedVersion: '2.4.0', phase: 'launching' }),
-  reportInstallLaunch: (value) => {
+  reportInstallLaunch(value) {
     acknowledgements.push(value);
     return { installedVersion: '2.4.0', phase: 'installing' };
   }
 };
+```
 
+POST:
+
+```js
 const response = await api(base, '/api/v1/updates/install-launch-result', {
   method: 'POST',
   body: JSON.stringify({ actionId: 'action-1', ok: true })
@@ -356,17 +356,19 @@ assert.deepEqual(acknowledgements, [{ actionId: 'action-1', ok: true }]);
 assert.equal((await response.json()).phase, 'installing');
 ```
 
-Also assert invalid body shapes return 400 through the existing TypeError mapping. Existing global auth handling already protects `/api/v1/*`; do not create a separate token mechanism.
+Also assert missing/blank `actionId`, non-boolean `ok`, and extra body keys return 400. Existing global `/api/v1/*` authentication remains the only auth layer.
 
-- [ ] **Step 7: Add the HTTP endpoint with strict body shaping**
+- [ ] **Step 7: Add the fixed acknowledgement route**
 
-In `backend/http-server.mjs`, place the route with the existing updater endpoints:
+Place it with the existing updater routes in `backend/http-server.mjs`:
 
 ```js
 if (url.pathname === '/api/v1/updates/install-launch-result' && req.method === 'POST') {
   if (!updateService) return json(res, 503, { error: 'updates_unavailable' });
   const body = await readBody(req);
-  if (typeof body.actionId !== 'string' || !body.actionId || typeof body.ok !== 'boolean'
+  if (typeof body.actionId !== 'string'
+      || !body.actionId
+      || typeof body.ok !== 'boolean'
       || Object.keys(body).some((key) => !['actionId', 'ok'].includes(key))) {
     throw new TypeError('Invalid update launch acknowledgement');
   }
@@ -374,23 +376,21 @@ if (url.pathname === '/api/v1/updates/install-launch-result' && req.method === '
 }
 ```
 
-Do not accept a staging path, command, executable, or error string from the client.
+Do not accept paths, commands, executables, or raw PowerShell errors from this endpoint.
 
-- [ ] **Step 8: Run the focused HTTP tests**
-
-Run:
+- [ ] **Step 8: Run HTTP tests**
 
 ```text
 node --test --test-concurrency=1 test/http-server.test.mjs
 ```
 
-Expected: updater acknowledgement route tests and existing host/update routes pass.
+Expected: PASS.
 
-- [ ] **Step 9: Update the tray handoff to acknowledge `Start-Process` success/failure**
+- [ ] **Step 9: Make the tray host acknowledge `Start-Process`**
 
-In `windows/tray-host.ps1`, keep `Start-UpdateInstaller` path containment and installer existence checks unchanged. In the `install-update` branch of `Handle-Poll`, require the queued `actionId` and report only `{ actionId, ok }`.
+Keep `Start-UpdateInstaller` path-containment and installer-file checks unchanged.
 
-The intended branch is structurally:
+Change only the `install-update` branch in `Handle-Poll` to require the queued `actionId`, call `Start-UpdateInstaller`, then report success/failure:
 
 ```powershell
 } elseif ([string]$action.type -eq 'install-update') {
@@ -399,7 +399,9 @@ The intended branch is structurally:
     if ([string]::IsNullOrWhiteSpace($actionId)) {
       throw 'Update launch action is missing its action id.'
     }
+
     Start-UpdateInstaller ([string]$action.stagingDir)
+
     try {
       Invoke-Api -Method 'POST' -Path '/api/v1/updates/install-launch-result' -Body @{
         actionId = $actionId
@@ -424,11 +426,11 @@ The intended branch is structurally:
 }
 ```
 
-Keep detailed system/path errors local to `tray.log`; do not send raw exception text to the browser/backend acknowledgement body.
+Do not send `stagingDir` or exception text in the acknowledgement body. Preserve UTF-8 BOM in `windows/tray-host.ps1`.
 
-- [ ] **Step 10: Add a shipped-script contract test for acknowledgement**
+- [ ] **Step 10: Add a shipped-tray contract test**
 
-In `test/package-layout.test.mjs`, add a focused static test that verifies `windows/tray-host.ps1` contains:
+In `test/package-layout.test.mjs`, add a test that reads `windows/tray-host.ps1` and asserts it contains all of:
 
 ```text
 /api/v1/updates/install-launch-result
@@ -438,11 +440,9 @@ ok = $false
 Start-UpdateInstaller
 ```
 
-and that the acknowledgement branch does not put `stagingDir` into the POST body. This is not a substitute for the update-service tests; it prevents packaging a tray script that forgets the return edge.
+Extract the `install-update` branch or a bounded substring and assert the POST body does not contain `stagingDir`.
 
 - [ ] **Step 11: Run the complete Task 1 focused set**
-
-Run:
 
 ```text
 node --test --test-concurrency=1 test/updates.test.mjs test/http-server.test.mjs test/package-layout.test.mjs
@@ -450,28 +450,28 @@ node --test --test-concurrency=1 test/updates.test.mjs test/http-server.test.mjs
 
 Expected: PASS.
 
-- [ ] **Step 12: Run the cheap full suite before exceptional-risk review**
-
-Run:
+- [ ] **Step 12: Run the cheap full suite before review**
 
 ```text
 npm test
 ```
 
-Expected: PASS. Fix any shared-contract regression before asking a reviewer to rediscover it.
+Expected: PASS.
 
-- [ ] **Step 13: Review the updater/process boundary**
+- [ ] **Step 13: Review the exceptional-risk updater boundary**
 
-If using the repository’s delegated workflow:
+If delegated, use `sol_reviewer` only for:
 
-- use `sol_reviewer` narrowly for `backend/updates.mjs`, the acknowledgement HTTP route, tray handoff, timeout/retry, candidate lifetime, and check/install mutual exclusion;
-- use `terra_reviewer` for ordinary integration/test review if useful;
-- apply only actionable findings within this approved 2.4.1 scope;
-- rerun the focused set and `npm test` after fixes.
+- pending candidate lifetime;
+- action-ID acknowledgement correctness;
+- timeout cleanup/retry;
+- duplicate/stale acknowledgements;
+- install/check mutual exclusion;
+- tray/backend race behavior.
 
-- [ ] **Step 14: Commit Task 1 after fresh validation**
+Use `terra_reviewer` for ordinary integration/test findings if useful. Apply only actionable findings inside this scope, then rerun the focused set and `npm test`.
 
-Suggested commit:
+- [ ] **Step 14: Commit the coherent updater boundary**
 
 ```text
 git add backend/updates.mjs backend/http-server.mjs windows/tray-host.ps1 test/updates.test.mjs test/http-server.test.mjs test/package-layout.test.mjs
@@ -480,80 +480,84 @@ git commit -m "fix: acknowledge updater installer launch"
 
 ---
 
-### Task 2: Render explicit updater feedback and prepare the 2.4.1 patch release
+### Task 2: Render explicit updater feedback and prepare 2.4.1
 
-**Ownership boundary:** bounded browser/release integration. If delegated after Task 1’s status contract is stable, `luna_implementer` at high reasoning is suitable. Use ordinary `terra_reviewer`; a second Sol review is unnecessary unless this task changes process/updater semantics beyond presentation.
+**Ownership boundary:** bounded UI/release integration. If delegated after Task 1 is stable, `luna_implementer` at high reasoning is appropriate. Use ordinary `terra_reviewer`.
 
 **Files:**
 - Modify: `resources/app.js`
 - Modify: `resources/index.html`
+- Create: `test/frontend-updates.test.mjs`
 - Modify: `test/frontend-smoke.test.mjs`
-- Optionally create/modify: a focused frontend updater renderer test using the project’s existing VM/test-hook style if static assertions are insufficient
 - Modify: `package.json`
 - Modify: `package-lock.json`
 - Modify: `README.txt`
 - Modify: `windows/install.ps1`
 - Modify: `scripts/package-windows.mjs`
 - Modify: `scripts/verify-release.mjs`
-- Modify: version-sensitive tests only where exact patch version is intentionally asserted
 
-**Interfaces:**
-- Consume updater status phases from Task 1: `idle`, `checking`, `current`, `available`, `downloading`, `launching`, `installing` plus `error` and `availableVersion`.
-- Keep existing DOM IDs: `update-status`, `update-notes`, `check-updates`, `install-update`, `installed-version`, `update-available`.
-- Do not add a frontend dependency or browser automation stack.
+**Interfaces:** Consume Task 1 phases `idle`, `checking`, `current`, `available`, `downloading`, `launching`, `installing`, plus `error` and `availableVersion`. Keep existing updater DOM IDs.
 
-- [ ] **Step 1: Add failing frontend expectations for the user-visible updater phases**
+- [ ] **Step 1: Add a small pure updater-presentation helper and test it first**
 
-Prefer to extract a tiny pure updater-view helper from `renderUpdates()` and expose it under the existing `__MED_CHECKIN_TEST__` hook, or add a narrowly-scoped VM harness. The helper should return presentation data, not mutate global state itself, for example:
+Before changing `renderUpdates()`, add a `__MED_CHECKIN_TEST__` export for a new pure helper `updatePresentation` and create `test/frontend-updates.test.mjs` using the project’s existing VM-hook pattern.
 
-```js
-function updatePresentation(update) {
-  // returns { statusText, showInstall, installDisabled, checkDisabled, showNotes, installLabel }
-}
-```
-
-Tests must assert at least:
+The test must cover:
 
 ```js
 assert.match(updatePresentation({
-  installedVersion: '2.4.1', phase: 'current', lastCheckedAt: '2026-08-10T03:51:00.000Z',
-  availableVersion: null, releaseNotes: null, error: null
+  installedVersion: '2.4.1',
+  phase: 'current',
+  lastCheckedAt: '2026-08-10T03:51:00.000Z',
+  availableVersion: null,
+  releaseNotes: null,
+  error: null
 }).statusText, /последняя версия/i);
 ```
 
 ```js
 assert.match(updatePresentation({
-  installedVersion: '2.4.0', phase: 'downloading', availableVersion: '2.4.1', error: null
+  installedVersion: '2.4.0',
+  phase: 'downloading',
+  availableVersion: '2.4.1',
+  releaseNotes: 'notes',
+  error: null
 }).statusText, /скачиваем|проверяем/i);
 ```
 
 ```js
 assert.match(updatePresentation({
-  installedVersion: '2.4.0', phase: 'launching', availableVersion: '2.4.1', error: null
+  installedVersion: '2.4.0',
+  phase: 'launching',
+  availableVersion: '2.4.1',
+  releaseNotes: 'notes',
+  error: null
 }).statusText, /запускаем установщик/i);
 ```
 
 ```js
 assert.match(updatePresentation({
-  installedVersion: '2.4.0', phase: 'installing', availableVersion: '2.4.1', error: null
+  installedVersion: '2.4.0',
+  phase: 'installing',
+  availableVersion: '2.4.1',
+  releaseNotes: 'notes',
+  error: null
 }).statusText, /перезапуст/i);
 ```
 
-For a recoverable launch error represented as `phase: 'available'`, assert the update button remains shown/enabled and the error is visible.
+For `{ phase: 'available', availableVersion: '2.4.1', error: 'launch failed' }`, assert `showInstall === true`, `installDisabled === false`, and the error is the visible status.
 
-- [ ] **Step 2: Run the focused frontend test and verify it fails before implementation**
-
-Run the exact new/modified frontend test, plus:
+- [ ] **Step 2: Run the focused frontend tests and verify the new behavior is initially red**
 
 ```text
-node --test --test-concurrency=1 test/frontend-smoke.test.mjs
+node --test --test-concurrency=1 test/frontend-updates.test.mjs test/frontend-smoke.test.mjs
 ```
 
-Expected before implementation: failure because `renderUpdates()` does not understand `phase === 'current'`, `launching`, or explicit progress copy.
+Expected before implementation: the new presentation test fails because `updatePresentation` does not exist.
 
-- [ ] **Step 3: Make updater presentation phase-driven in `resources/app.js`**
+- [ ] **Step 3: Implement `updatePresentation(update)` in `resources/app.js`**
 
-Implement a small pure presentation helper with behavior equivalent to:
+Use phase-driven presentation equivalent to:
 
 ```js
 function updatePresentation(update) {
@@ -591,9 +595,17 @@ function updatePresentation(update) {
 }
 ```
 
-Exact punctuation may differ, but preserve the approved Russian meaning and phase behavior.
+Exact punctuation may vary; preserve the approved Russian meaning.
 
-Then make `renderUpdates()` consume that helper:
+Expose only this pure helper under the existing test hook:
+
+```js
+globalThis.__MED_CHECKIN_TEST__.updatePresentation = updatePresentation;
+```
+
+- [ ] **Step 4: Make `renderUpdates()` consume the helper**
+
+Replace `availableVersion`-driven visibility with:
 
 ```js
 const presentation = updatePresentation(update);
@@ -602,16 +614,17 @@ $('#check-updates').disabled = presentation.checkDisabled;
 $('#install-update').hidden = !presentation.showInstall;
 $('#install-update').disabled = presentation.installDisabled;
 $('#install-update').textContent = presentation.installLabel;
+
 const notes = $('#update-notes');
 notes.textContent = update.releaseNotes || '';
 notes.hidden = !presentation.showNotes || !update.releaseNotes;
 ```
 
-Keep `installed-version` driven by `installedVersion` as today.
+Keep `installed-version` driven by `update.installedVersion` and keep the global update-available affordance based on the actual available state rather than transitional phases.
 
-- [ ] **Step 4: Remove misleading post-download toast timing**
+- [ ] **Step 5: Remove the temporally misleading success toast from `installUpdate()`**
 
-`installUpdate()` currently awaits download/checksum/extraction and only then shows `Подготовка обновления…`, which is temporally backwards. Let SSE/rendered state communicate progress. Keep only failure toast if useful:
+The API call returns only after download/checksum/extraction, so the current post-await `Подготовка обновления…` toast is backwards. Rely on SSE + rendered phase state:
 
 ```js
 async function installUpdate() {
@@ -624,23 +637,17 @@ async function installUpdate() {
 }
 ```
 
-`checkUpdates()` likewise relies on the returned/SSE state; `current` provides the persistent positive confirmation.
+Do not add artificial progress percentages.
 
-- [ ] **Step 5: Run the focused frontend tests**
-
-Run:
+- [ ] **Step 6: Run focused frontend tests**
 
 ```text
-node --test --test-concurrency=1 test/frontend-smoke.test.mjs
+node --test --test-concurrency=1 test/frontend-updates.test.mjs test/frontend-smoke.test.mjs
 ```
-
-and the focused updater-renderer test if separate.
 
 Expected: PASS.
 
-- [ ] **Step 6: Bump release metadata to exactly 2.4.1 without changing stable Windows identities**
-
-Update:
+- [ ] **Step 7: Bump exact patch metadata to 2.4.1**
 
 `package.json`:
 
@@ -648,7 +655,7 @@ Update:
 "version": "2.4.1"
 ```
 
-`package-lock.json` root and package entry:
+`package-lock.json`, both top-level and root package:
 
 ```json
 "version": "2.4.1"
@@ -666,13 +673,13 @@ Keep:
 <h1>Med Check-in <span>2.4</span></h1>
 ```
 
-`windows/install.ps1` exact patch strings:
+`windows/install.ps1`:
 
 ```powershell
 $AppName = 'Med Check-in 2.4.1'
 ```
 
-and diagnostics heading `Med Check-in 2.4.1 installation diagnostics`. Keep task names and `Med Check-in 2.4.lnk` shortcut family unchanged.
+and change the diagnostics heading to `Med Check-in 2.4.1 installation diagnostics`. Preserve ASCII-safe CRLF. Keep scheduled task names and `Med Check-in 2.4.lnk` shortcut family unchanged.
 
 `scripts/package-windows.mjs`:
 
@@ -687,13 +694,11 @@ const archiveName = 'med-checkin-2.4.1-windows-installer.zip';
 const VERSION = '2.4.1';
 ```
 
-Keep its visible heading check on `<span>2.4</span>`.
+Keep its visible `<span>2.4</span>` assertion.
 
-Update exact-version test assertions only when they intentionally describe the patch release.
+- [ ] **Step 8: Update `README.txt` narrowly**
 
-- [ ] **Step 7: Update `README.txt` narrowly**
-
-Change the heading to `MED CHECK-IN 2.4.1` and revise only the updater section to document observable behavior:
+Change the heading to `MED CHECK-IN 2.4.1` and replace only the updater section with behavior equivalent to:
 
 ```text
 Обновления
@@ -712,68 +717,61 @@ Change the heading to `MED CHECK-IN 2.4.1` and revise only the updater section t
 копии, настройки и черновики.
 ```
 
-Do not turn README into a changelog or add unrelated 2.4 feature prose.
+Do not broaden README into a changelog.
 
-- [ ] **Step 8: Run version/package-sensitive tests before packaging**
-
-Run at minimum:
+- [ ] **Step 9: Run version/package-sensitive focused tests**
 
 ```text
-node --test --test-concurrency=1 test/frontend-smoke.test.mjs test/package-layout.test.mjs
+node --test --test-concurrency=1 test/frontend-updates.test.mjs test/frontend-smoke.test.mjs test/package-layout.test.mjs
 ```
 
 Expected: PASS.
 
-- [ ] **Step 9: Run the full repository gate**
-
-Run:
+- [ ] **Step 10: Run the full repository gate**
 
 ```text
 npm test
 ```
 
-Expected: PASS with the new updater/frontend regressions included.
+Expected: PASS.
 
-- [ ] **Step 10: Build and verify the Windows 2.4.1 archive**
-
-Run:
+- [ ] **Step 11: Build and verify the Windows archive**
 
 ```text
 npm run package:windows
 ```
 
-Expected:
+Expected archive/checksum names:
 
 ```text
 med-checkin-2.4.1-windows-installer.zip
 med-checkin-2.4.1-windows-installer.zip.sha256
 ```
 
-and successful release verification. Do not commit `dist/` artifacts unless existing repository policy explicitly says to.
+Do not commit `dist/` artifacts unless repository policy explicitly changes.
 
-- [ ] **Step 11: Run whitespace/integration sanity**
-
-Run:
+- [ ] **Step 12: Run whitespace and worktree sanity**
 
 ```text
 git diff --check
-```
-
-Then inspect:
-
-```text
 git status --short
 ```
 
-Expected: only intended source/test/docs/version files, no private data or generated package artifacts staged/tracked accidentally.
+Expected: only intended source/test/docs/version changes; no private data or generated package artifacts tracked.
 
-- [ ] **Step 12: Ordinary review and final coherent review**
+- [ ] **Step 13: Review the UI/release boundary and the integrated branch**
 
-Use `terra_reviewer` for the browser/release boundary. If Tasks 1 and 2 were implemented by separate workers, do one final coherent whole-branch Terra review focused on cross-boundary status names, endpoint/action identity, UI rendering, and version/package consistency.
+Use `terra_reviewer` for ordinary browser/release review. If Tasks 1 and 2 were implemented by separate workers, do one final coherent whole-branch Terra review focused on:
 
-Do not add another Sol pass unless Task 2 changed the updater/process semantics from Task 1.
+- phase names matching backend and browser;
+- acknowledgement endpoint/action identity;
+- retry visibility;
+- version/package consistency;
+- no accidental task/shortcut identity churn.
 
-After any fixes, rerun:
+A second Sol pass is unnecessary unless Task 2 changes updater/process semantics beyond Task 1.
+
+After fixes, rerun:
 
 ```text
 npm test
@@ -781,25 +779,18 @@ npm run package:windows
 git diff --check
 ```
 
-- [ ] **Step 13: Commit Task 2 after fresh validation**
-
-Suggested commit:
+- [ ] **Step 14: Commit Task 2 after fresh validation**
 
 ```text
-git add resources/app.js resources/index.html test/frontend-smoke.test.mjs package.json package-lock.json README.txt windows/install.ps1 scripts/package-windows.mjs scripts/verify-release.mjs
-git add <any focused updater-renderer test actually created>
+git add resources/app.js resources/index.html test/frontend-updates.test.mjs test/frontend-smoke.test.mjs package.json package-lock.json README.txt windows/install.ps1 scripts/package-windows.mjs scripts/verify-release.mjs
 git commit -m "chore: prepare Med Check-in 2.4.1"
 ```
 
-Do not stage generated `dist/` output.
-
 ---
 
-## Final validation and release-owned smoke
+## Final Validation and Release Sequence
 
-- [ ] **Step 1: Confirm clean branch and fresh gates after the final source change**
-
-Run:
+- [ ] **Step 1: Re-run fresh gates after the last source change**
 
 ```text
 npm test
@@ -808,15 +799,15 @@ git diff --check
 git status --short
 ```
 
-Report exact counts/results. Do not rely on earlier task-local output after a later source edit.
+Report exact test count, packaging verification, and worktree state. Do not rely on earlier task-local output after later edits.
 
-- [ ] **Step 2: Push/open a PR only if the user has authorized those external mutations for the implementation run**
+- [ ] **Step 2: Push/open a PR only when the implementation task explicitly authorizes those mutations**
 
-Follow `AGENTS.md` and `.codex/PROJECT.md`. A local implementation request does not itself authorize push/PR/release unless the user’s Codex task explicitly grants it.
+Follow `AGENTS.md` and `.codex/PROJECT.md`. No implicit push/PR/release authorization.
 
 - [ ] **Step 3: Require Windows CI on the implementation head**
 
-Canonical CI evidence:
+Canonical hosted gate:
 
 ```text
 npm ci --ignore-scripts
@@ -826,32 +817,42 @@ npm run package:windows
 
 Do not claim Windows CI from local packaging.
 
-- [ ] **Step 4: Before publishing 2.4.1, perform the manual updater smoke from installed 2.4.0**
+- [ ] **Step 4: Merge/tag/publish only with explicit release authorization**
 
-Use a safe real-Windows installation with a backup/data copy as appropriate. Observe, rather than infer:
+The production updater only considers the official repository’s latest **public stable** release. A draft or prerelease cannot provide the true updater smoke. Therefore code review, tests, package verification, and Windows CI happen first; then 2.4.1 is published; then the real updater smoke happens immediately.
+
+- [ ] **Step 5: Immediately smoke the public 2.4.1 update from installed 2.4.0**
+
+Observe the full path:
 
 ```text
-Check for updates
--> explicit current/no-update message when no newer release is present
-
-When 2.4.1 is the newer published/testable release:
-available 2.4.1
--> click Обновить
+2.4.0 Settings
+-> Проверить обновления
+-> Доступна версия 2.4.1
+-> Обновить
 -> visible downloading/verifying state
 -> visible launching-installer state
 -> visible installer-started/restart state (even if brief)
 -> old window closes as installer takes over
--> application relaunches as 2.4.1
+-> app relaunches as 2.4.1
 -> existing records/settings/drafts remain present
 ```
 
-Do not intentionally sabotage the user’s live installer to test the failure path. Automated acknowledgement-failure/timeout coverage owns that case.
+After relaunch, press `Проверить обновления` again and verify the persistent positive result:
 
-## Expected implementation commits
+```text
+У вас установлена последняя версия.
+```
 
-Keep this proportional to the change rather than creating a commit per checkbox:
+Do not intentionally break the live installer to test failure. Automated negative-acknowledgement and timeout tests own that path.
+
+Only consider the patch release finalized after this post-publication smoke passes. If it fails, stop further rollout/announcement and fix forward rather than manually mutating the user’s data.
+
+## Expected Implementation Commits
+
+Keep commit structure proportional:
 
 1. `fix: acknowledge updater installer launch`
 2. `chore: prepare Med Check-in 2.4.1`
 
-If implementation naturally lands as one coherent validated commit, that is also acceptable. Do not split merely for ceremony.
+If the implementation naturally lands as one coherent validated commit, that is acceptable. Do not split merely for ceremony.
