@@ -20,6 +20,7 @@ Med Check-in is a single-user local Windows application.
 - Backups: `%LOCALAPPDATA%\MedCheckin2\backups`.
 - Browser drafts live in the dedicated Edge profile, including `edge-profile\Default\Local Storage`.
 - There is no cloud sync or application telemetry.
+- Update metadata and explicitly requested update downloads use only the official GitHub repository; medical data and treatment data are not sent with update requests.
 
 Do not introduce cloud sync, cross-platform packaging, a different desktop shell, Merge import,
 identity redesign, or broad architecture changes unless an approved plan explicitly includes them.
@@ -29,13 +30,14 @@ identity redesign, or broad architecture changes unless an approved plan explici
 Use the smallest route that answers the task.
 
 - Repository operating policy: `AGENTS.md`.
-- Product behavior, installation, data location, privacy, restore/import behavior, and current release notes: `README.txt`.
+- Product behavior, installation, data location, privacy, restore/import behavior, updater behavior, and current release notes: `README.txt`.
 - Supported commands and package version: `package.json`.
 - Canonical CI sequence and Node version: `.github/workflows/windows-ci.yml`.
 - Release contents and archive verification: `scripts/package-windows.mjs`, `scripts/verify-release.mjs`, and `test/package-layout.test.mjs`.
-- Persistent-data contracts: `backend/domain.mjs`, `backend/schema.mjs`, `backend/migrations.mjs`, `backend/repository.mjs`, `backend/treatment.mjs`, plus their corresponding tests.
+- Persistent-data contracts: `backend/domain.mjs`, `backend/tracked-items.mjs`, `backend/schema.mjs`, `backend/migrations.mjs`, `backend/repository.mjs`, `backend/treatment.mjs`, plus their corresponding tests.
 - Backup, restore, and portable Replace import: `backend/backups.mjs`, `backend/data-maintenance.mjs`, `test/backups.test.mjs`, `test/backup-smoke.test.mjs`, `test/data-maintenance.test.mjs`.
 - Local HTTP/runtime behavior: `backend/main.mjs`, `backend/http-server.mjs`, `backend/reminders.mjs`, `backend/host-actions.mjs`, `backend/supervisor.mjs`, `backend/process-safety.mjs`, plus corresponding tests.
+- Updater behavior: `backend/updates.mjs`, updater routes in `backend/http-server.mjs`, tray handoff in `windows/tray-host.ps1`, installer behavior in `windows/install.ps1`, and updater/package tests.
 - Browser UI and draft behavior: `resources/index.html`, `resources/app.js`, `resources/draft-store.js`, `resources/startup-runtime.js`, `test/frontend-smoke.test.mjs`, `test/draft-store.test.mjs`, `test/startup-runtime.test.mjs`.
 - Windows install/tray/uninstall behavior: `windows/install.ps1`, `windows/tray-host.ps1`, `windows/uninstall.ps1`, and `test/package-layout.test.mjs`.
 
@@ -73,7 +75,10 @@ node --test --test-concurrency=1 test/package-layout.test.mjs
 npm test
 ```
 
-This runs the full Node test suite serially.
+This runs the full Node test suite serially. It is cheap enough in this repository to run after a
+meaningful coherent implementation boundary and before expensive exceptional-risk review. Do that
+when the boundary can affect shared contracts, so a high-capability reviewer is not spending its
+context merely discovering stale integration expectations.
 
 ### Build / packaging
 
@@ -104,16 +109,26 @@ These are current behavior, not permission to redesign them silently.
   `kind = "extra"` and `period = null`.
 - Scheduled observations require all eight primary scales. Extra observations may contain a meaningful
   subset but may not be empty.
+- Tracked context/symptom/activation definitions are persisted with stable IDs. Definitions may be
+  renamed or archived; existing observations keep their stored IDs, and archived definitions remain
+  meaningful when historical observations are edited.
 - Reminder times are configurable, while Day/Evening identity remains semantic rather than being the
   literal configured clock time.
 - Treatment history stores complete regimen snapshots at each effective change.
+- Fresh databases contain no personal treatment history by default.
 - SQLite schema compatibility is migration-controlled; backup/restore validation must reject incomplete
   or newer incompatible schemas before replacing live data.
-- Portable JSON uses the `med-checkin-2` versioned format and supports explicit Replace import only.
-  It does not provide Merge import.
+- Portable JSON uses the `med-checkin-2` versioned format and explicit Replace import only. Current
+  format v2 carries tracked-item definitions; v1 remains accepted for compatibility. There is no Merge import.
 - Restore and Replace import create recoverable pre-operation SQLite backups before destructive replacement.
 - Reminder transient state remains local and is not replaced by portable import.
 - Browser drafts are local state and must survive ordinary application upgrades.
+- Update discovery is fixed to the official GitHub repository. Installation is explicit, verifies the
+  published SHA-256 before extraction/launch, and preserves `%LOCALAPPDATA%\MedCheckin2`.
+- Updater checks and installation staging are mutually exclusive. While installation is in flight, a
+  check must not fetch metadata or mutate the candidate/status. While a check is in flight, install must
+  not proceed. Concurrent checks may coalesce. Regression coverage must exercise both install -> check
+  and check -> install interleavings; proving only one direction is insufficient.
 
 When a change intentionally alters one of these contracts, update this adapter if the fact remains
 useful to future orchestration.
@@ -127,14 +142,15 @@ These are likely coherent delegation boundaries, not mandatory agent-per-section
 Likely files:
 
 - `backend/domain.mjs`
+- `backend/tracked-items.mjs`
 - `backend/schema.mjs`
 - `backend/migrations.mjs`
 - `backend/repository.mjs`
 - `backend/treatment.mjs`
 - corresponding `test/*.test.mjs`
 
-Important contracts: semantic Day/Evening/Extra identity, validation rules, SQLite schema,
-migrations, timestamps, treatment snapshots, and repository writes.
+Important contracts: semantic Day/Evening/Extra identity, tracked-item stable IDs and archive behavior,
+validation rules, SQLite schema, migrations, timestamps, treatment snapshots, and repository writes.
 
 ### Backup, restore, and portable data lifecycle
 
@@ -148,7 +164,7 @@ Likely files:
 - `test/data-maintenance.test.mjs`
 
 Important contracts: validation before replacement, pre-operation backups, rollback/recovery,
-portable-format compatibility, and preservation of local-only state.
+portable-format compatibility, tracked-item definition portability, and preservation of local-only state.
 
 ### Browser UI, drafts, and analytics presentation
 
@@ -162,24 +178,25 @@ Likely files:
 - `backend/analytics.mjs` when calculations change
 - frontend/draft/analytics tests
 
-Important contracts: browser draft recovery, bearer-token startup handoff, semantic forms/history,
-and keeping static shipped HTML free of user-specific data.
+Important contracts: browser draft recovery, preservation of unresolved historical tracked IDs, bearer-token
+startup handoff, semantic forms/history, and keeping static shipped HTML free of user-specific data.
 
-### Local runtime, reminders, and process supervision
+### Local runtime, reminders, updater, and process supervision
 
 Likely files:
 
 - `backend/main.mjs`
 - `backend/http-server.mjs`
 - `backend/reminders.mjs`
+- `backend/updates.mjs`
 - `backend/host-actions.mjs`
 - `backend/supervisor.mjs`
 - `backend/process-safety.mjs`
 - `windows/tray-host.ps1`
-- corresponding runtime/reminder/process tests
+- corresponding runtime/reminder/updater/process tests
 
-Important contracts: loopback-only API, bearer-token authorization, owned-process termination,
-tray heartbeat, scheduled reminder semantics, and quit/restart behavior.
+Important contracts: loopback-only API, bearer-token authorization, updater check/install mutual exclusion,
+owned-process termination, tray heartbeat, scheduled reminder semantics, and quit/restart behavior.
 
 ### Windows distribution and release mechanics
 
@@ -197,10 +214,10 @@ Likely files:
 - `README.txt`
 - `test/package-layout.test.mjs`
 
-Important contracts: pinned and SHA-256-verified Node runtime, clean replacement of installed app
-files, preservation of `%LOCALAPPDATA%\MedCheckin2`, scheduled-task registration, dedicated Edge
-profile handling, archive contents, bootstrap encoding/line-ending requirements, and consistent
-release metadata.
+Important contracts: pinned and SHA-256-verified Node runtime, exact reuse validation for the app-owned
+Node runtime, verified update handoff, clean replacement of installed app files, preservation of
+`%LOCALAPPDATA%\MedCheckin2`, scheduled-task registration, dedicated Edge profile handling, archive
+contents, bootstrap encoding/line-ending requirements, and consistent release metadata.
 
 ## Exceptional-risk surfaces
 
@@ -208,15 +225,16 @@ Use narrow `sol_reviewer` review when the actual diff touches a concrete high-co
 not merely because these files exist.
 
 - SQLite schema changes, migrations, repository write semantics, identity/timestamp preservation,
-  treatment persistence, or compatibility rules.
+  treatment persistence, tracked-item definition persistence, or compatibility rules.
 - Backup validation, restore, portable Replace import, rollback, WAL/SHM handling, or any operation
   capable of replacing the live database.
 - Recursive deletion, installer/uninstaller cleanup, path-containment logic, or anything that could
   remove `%LOCALAPPDATA%\MedCheckin2` or browser draft storage.
 - Changes to local bearer-token handling, loopback binding, runtime token exposure/removal, fixed host
   actions, or other security/privacy boundaries.
-- Process ownership, supervisor/watchdog behavior, tray/backend coordination, retry/idempotency, or
-  concurrency where a mistake could kill unrelated processes or corrupt state.
+- Process ownership, supervisor/watchdog behavior, tray/backend coordination, updater mutual exclusion,
+  retry/idempotency, or concurrency where a mistake could kill unrelated processes, queue multiple
+  installers, install a stale candidate, or corrupt state.
 - Release installer download/integrity verification or similarly high-consequence distribution logic.
 
 ## Manual or environment validation
@@ -225,8 +243,8 @@ Automated tests are necessary but not sufficient for Windows shell/distribution 
 
 ### Installer, tray, Edge, or release changes
 
-When these surfaces change and the plan calls for release-level confidence, use a real Windows smoke
-check after automated validation:
+When these surfaces change and the plan calls for release-level confidence, use a disposable real
+Windows environment for destructive upgrade checks where practical:
 
 ```text
 install or upgrade from the previous released build
@@ -237,6 +255,11 @@ install or upgrade from the previous released build
 -> close and reopen
 -> tray/reminder controls still work
 ```
+
+If the available host contains the user's real Med Check-in installation/data and no disposable VM,
+Windows Sandbox, or equivalent environment is already available, do not improvise the destructive
+upgrade smoke against the real installation and do not spend the run trying to reconfigure the host
+just to manufacture one. Report that evidence as manual/environment-owned instead.
 
 If scheduled-task, logon, watchdog, snooze/dismiss, or quit/restart behavior changed, exercise the
 specific affected Windows behavior rather than inferring it from packaging success.
@@ -279,8 +302,10 @@ These mirror repository policy and exist here so orchestration does not guess.
   relevant files, contracts, tests, and commands.
 - Give delegated workers bounded deliverables, acceptance criteria, validation, and stop conditions;
   do not replay every parent-plan micro-step unless the risk genuinely requires it.
-- Child validation does not replace primary integration. Run `npm test` for meaningful shared or
-  cross-cutting changes and `npm run package:windows` when release/distribution behavior is in scope.
+- Child validation does not replace primary integration. Run `npm test` after meaningful shared or
+  cross-cutting boundaries and before expensive exceptional-risk review when practical; run it again
+  as the final repository gate. Run `npm run package:windows` when release/distribution behavior is in scope.
 - Use `terra_reviewer` for ordinary coherent implementation review. Add `sol_reviewer` only for a
-  concrete exceptional-risk surface in the actual diff.
+  concrete exceptional-risk surface in the actual diff. For substantial multi-boundary changes, keep
+  one final coherent whole-branch Terra review when cross-boundary regressions are plausible.
 - Do not infer success from stale test output or a previous package build.
