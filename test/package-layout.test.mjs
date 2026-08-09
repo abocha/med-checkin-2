@@ -333,6 +333,17 @@ test('updater handoff constructs an installer only inside the validated temporar
   assert.doesNotMatch(script, /action\.installerPath|action\.url|action\.command/i);
 });
 
+test('tray host acknowledges verified installer launch without exposing staging paths', () => {
+  const script = readFileSync(join(root, 'windows/tray-host.ps1'), 'utf8');
+  const installBranch = script.slice(script.indexOf("} elseif ([string]$action.type -eq 'install-update')"), script.indexOf('\n    }\n  }\n\n  if ($Response.due)', script.indexOf("} elseif ([string]$action.type -eq 'install-update')")));
+  for (const required of ['/api/v1/updates/install-launch-result', 'actionId', 'ok = $true', 'ok = $false', 'Start-UpdateInstaller']) {
+    assert.ok(installBranch.includes(required), `install-update branch is missing ${required}`);
+  }
+  const acknowledgements = installBranch.match(/Invoke-Api -Method 'POST'[\s\S]*?\} \| Out-Null/g) ?? [];
+  assert.ok(acknowledgements.length >= 2);
+  for (const acknowledgement of acknowledgements) assert.doesNotMatch(acknowledgement, /stagingDir/i);
+});
+
 test('installer reuses only the exact app-owned Node runtime and otherwise retains verified download fallback', () => {
   const script = readFileSync(join(root, 'windows/install.ps1'), 'utf8');
   assert.match(script, /\$InstallDir 'runtime\\node'/);

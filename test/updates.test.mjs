@@ -31,7 +31,7 @@ function release(version = '2.3.1', assets = true) {
   };
 }
 
-function fixture({ metadata = release(), zip = archive, sha = `${checksum}  med-checkin-2.3.1-windows-installer.zip\n`, extractor, now = new Date('2026-08-09T00:00:00Z') } = {}) {
+function fixture({ metadata = release(), zip = archive, sha = `${checksum}  med-checkin-2.3.1-windows-installer.zip\n`, extractor, now = new Date('2026-08-09T00:00:00Z'), launchAckTimeoutMs } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), 'med-checkin-updates-data-'));
   const actions = createHostActionQueue();
   const requested = [];
@@ -44,7 +44,7 @@ function fixture({ metadata = release(), zip = archive, sha = `${checksum}  med-
   };
   const service = createUpdateService({
     installedVersion: '2.3.0', dataDir, hostActions: actions, fetchImpl,
-    now: () => now,
+    now: () => now, launchAckTimeoutMs,
     extractArchive: extractor ?? ((source, destination) => {
       mkdirSync(join(destination, 'MedCheckin2'), { recursive: true });
       writeFileSync(join(destination, 'MedCheckin2', 'INSTALL.bat'), 'installer');
@@ -59,7 +59,8 @@ test('only exposes a newer stable release in the installed major version', async
     try {
       const status = await f.service.check({ force: true });
       assert.equal(status.availableVersion, null);
-      assert.equal(status.phase, 'idle');
+      assert.equal(status.phase, 'current');
+      assert.equal(status.error, null);
     } finally { f.close(); }
   }
 });
@@ -110,18 +111,85 @@ test('does not launch when extraction fails or staging lacks the constructed ins
   }
 });
 
-test('queues exactly one verified staging directory and installs without refetching metadata', async () => {
+test('queues exactly one verified staging directory and waits for launch acknowledgement without refetching metadata', async () => {
+  const f = fixture();
+  try {
+    await f.service.check({ force: true });
+    const launching = await f.service.installAvailable();
+    assert.equal(launching.phase, 'launching');
+    assert.equal(launching.availableVersion, '2.3.1');
+    const actions = f.actions.drain();
+    assert.equal(actions.length, 1);
+    assert.equal(actions[0].type, 'install-update');
+    assert.equal(typeof actions[0].actionId, 'string');
+    assert.ok(actions[0].actionId.length > 0);
+    assert.match(actions[0].stagingDir, /MedCheckin2-update-/);
+    assert.equal(existsSync(join(actions[0].stagingDir, 'MedCheckin2', 'INSTALL.bat')), true);
+    assert.deepEqual(f.requested, [RELEASES_URL, 'https://release.test/app.zip', 'https://release.test/app.zip.sha256']);
+    const installing = f.service.reportInstallLaunch({ actionId: actions[0].actionId, ok: true });
+    assert.equal(installing.phase, 'installing');
+    assert.equal(installing.availableVersion, '2.3.1');
+    rmSync(actions[0].stagingDir, { recursive: true, force: true });
+  } finally { f.close(); }
+});
+
+test('failed installer launch restores the candidate and permits retry', async () => {
   const f = fixture();
   try {
     await f.service.check({ force: true });
     await f.service.installAvailable();
-    const actions = f.actions.drain();
-    assert.equal(actions.length, 1);
-    assert.equal(actions[0].type, 'install-update');
-    assert.match(actions[0].stagingDir, /MedCheckin2-update-/);
-    assert.equal(existsSync(join(actions[0].stagingDir, 'MedCheckin2', 'INSTALL.bat')), true);
-    assert.deepEqual(f.requested, [RELEASES_URL, 'https://release.test/app.zip', 'https://release.test/app.zip.sha256']);
-    rmSync(actions[0].stagingDir, { recursive: true, force: true });
+    const [action] = f.actions.drain();
+    const failed = f.service.reportInstallLaunch({ actionId: action.actionId, ok: false });
+    assert.equal(failed.phase, 'available');
+    assert.equal(failed.availableVersion, '2.3.1');
+    assert.ok(failed.error);
+    const retry = await f.service.installAvailable();
+    assert.equal(retry.phase, 'launching');
+    const [retryAction] = f.actions.drain();
+    f.service.reportInstallLaunch({ actionId: retryAction.actionId, ok: false });
+  } finally { f.close(); }
+});
+
+test('pending installer launch blocks checks and duplicate install attempts', async () => {
+  const f = fixture();
+  try {
+    await f.service.check({ force: true });
+    await f.service.installAvailable();
+    const requestsBefore = f.requested.length;
+    await f.service.check({ force: true });
+    assert.equal(f.requested.length, requestsBefore);
+    await assert.rejects(f.service.installAvailable(), /already|launch|install/i);
+    const [action] = f.actions.drain();
+    f.service.reportInstallLaunch({ actionId: action.actionId, ok: false });
+  } finally { f.close(); }
+});
+
+test('stale installer acknowledgement cannot mutate updater state', async () => {
+  const f = fixture();
+  try {
+    await f.service.check({ force: true });
+    await f.service.installAvailable();
+    const before = f.service.getStatus();
+    assert.throws(
+      () => f.service.reportInstallLaunch({ actionId: 'stale-action', ok: true }),
+      /action|launch/i
+    );
+    assert.deepEqual(f.service.getStatus(), before);
+    const [action] = f.actions.drain();
+    f.service.reportInstallLaunch({ actionId: action.actionId, ok: false });
+  } finally { f.close(); }
+});
+
+test('unacknowledged installer launch times out to a retryable candidate', async () => {
+  const f = fixture({ launchAckTimeoutMs: 10 });
+  try {
+    await f.service.check({ force: true });
+    await f.service.installAvailable();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const status = f.service.getStatus();
+    assert.equal(status.phase, 'available');
+    assert.equal(status.availableVersion, '2.3.1');
+    assert.ok(status.error);
   } finally { f.close(); }
 });
 

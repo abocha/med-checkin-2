@@ -217,8 +217,35 @@ function Handle-Poll([object]$Response) {
     } elseif ([string]$action.type -eq 'open-data-folder') {
       Start-Process -FilePath 'explorer.exe' -ArgumentList @([string]$action.path) | Out-Null
     } elseif ([string]$action.type -eq 'install-update') {
-      try { Start-UpdateInstaller ([string]$action.stagingDir) }
-      catch { Write-TrayLog ('Could not start verified update installer: ' + $_.Exception.Message) }
+      $actionId = [string]$action.actionId
+      try {
+        if ([string]::IsNullOrWhiteSpace($actionId)) {
+          throw 'Update launch action is missing its action id.'
+        }
+
+        Start-UpdateInstaller ([string]$action.stagingDir)
+
+        try {
+          Invoke-Api -Method 'POST' -Path '/api/v1/updates/install-launch-result' -Body @{
+            actionId = $actionId
+            ok = $true
+          } | Out-Null
+        } catch {
+          Write-TrayLog ('Could not acknowledge verified update installer launch: ' + $_.Exception.Message)
+        }
+      } catch {
+        Write-TrayLog ('Could not start verified update installer: ' + $_.Exception.Message)
+        if (-not [string]::IsNullOrWhiteSpace($actionId)) {
+          try {
+            Invoke-Api -Method 'POST' -Path '/api/v1/updates/install-launch-result' -Body @{
+              actionId = $actionId
+              ok = $false
+            } | Out-Null
+          } catch {
+            Write-TrayLog ('Could not report verified update installer launch failure: ' + $_.Exception.Message)
+          }
+        }
+      }
     }
   }
 

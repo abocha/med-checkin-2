@@ -209,6 +209,17 @@ export function createHttpServer({ repo, token, dataDir, resourcesDir = null, ho
       if (!updateService) return json(res, 503, { error: 'updates_unavailable' });
       return json(res, 200, await updateService.installAvailable());
     }
+    if (url.pathname === '/api/v1/updates/install-launch-result' && req.method === 'POST') {
+      if (!updateService) return json(res, 503, { error: 'updates_unavailable' });
+      const body = await readBody(req);
+      if (typeof body.actionId !== 'string'
+          || !body.actionId.trim()
+          || typeof body.ok !== 'boolean'
+          || Object.keys(body).some((key) => !['actionId', 'ok'].includes(key))) {
+        throw new TypeError('Invalid update launch acknowledgement');
+      }
+      return json(res, 200, updateService.reportInstallLaunch({ actionId: body.actionId, ok: body.ok }));
+    }
 
     if (url.pathname === '/api/v1/tracked-items' && req.method === 'POST') {
       repo.createTrackedItem(await readBody(req));
