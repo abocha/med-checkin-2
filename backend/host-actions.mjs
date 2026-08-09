@@ -13,6 +13,12 @@ export function createHostActionQueue({ maxSize = 50 } = {}) {
     drain() {
       return queue.splice(0, queue.length);
     },
+    removeByActionId(actionId) {
+      const index = queue.findIndex((action) => action.type === 'install-update' && action.actionId === actionId);
+      if (index === -1) return false;
+      queue.splice(index, 1);
+      return true;
+    },
     get size() { return queue.length; }
   };
 }

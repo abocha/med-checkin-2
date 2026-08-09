@@ -18,7 +18,7 @@ There is a second, smaller feedback gap: a successful manual check that finds no
 - checking, downloading/verifying, launching, and installer-started states are visible in the update card;
 - the backend does not treat a queued tray action as proof that the installer started;
 - the tray host acknowledges installer-launch success or failure back to the backend;
-- a launch failure or missing acknowledgement restores the available update and a usable retry path;
+- a launch failure, or an acknowledgement timeout while the action is still queued, restores the available update and a usable retry path; a timeout after the tray has drained the action remains blocked while waiting for the installer restart or a late exact acknowledgement;
 - the existing GitHub-only discovery, SHA-256 verification, package extraction, installer, data preservation, and updater mutual-exclusion contracts remain unchanged.
 
 This is a patch release: **2.4.1**.
@@ -38,8 +38,8 @@ This is a patch release: **2.4.1**.
    - check/preparation/launch failure.
 2. Positive user-facing result after a successful check with no newer compatible version.
 3. A narrow acknowledgement protocol between the PowerShell tray host and the backend for the existing `install-update` host action.
-4. A bounded acknowledgement timeout so a drained/lost host action does not leave the updater permanently stuck.
-5. Retry after installer-launch failure or acknowledgement timeout.
+4. A bounded acknowledgement timeout that retries only a still-queued action and fails closed after the tray has drained the action.
+5. Retry after installer-launch failure or a still-queued acknowledgement timeout.
 6. 2.4.1 version/release metadata and updater documentation.
 7. Automated regression coverage plus one real-Windows updater smoke immediately after 2.4.1 is published and visible to the existing 2.4.0 updater.
 
@@ -100,7 +100,7 @@ The intended phases are:
 | `launching` | verified package is staged and an installer-launch host action is awaiting acknowledgement | `Запускаем установщик X…` |
 | `installing` | tray host successfully started the installer process | `Установщик запущен. Приложение перезапустится автоматически.` |
 
-Errors remain explicit via `status.error` and take precedence in the rendered status copy. An error during checking may leave no candidate. An error during installer launch/acknowledgement returns to `available` and keeps the candidate retryable.
+Errors remain explicit via `status.error` and take precedence in the rendered status copy. An error during checking may leave no candidate. A launch failure or an acknowledgement timeout while the action remains queued returns to `available` and keeps the candidate retryable. Once the tray has drained the action, an acknowledgement timeout remains `launching` and blocks a second installer launch while the old process waits for restart or a late exact acknowledgement.
 
 A periodic automatic check may also leave the durable `current` state. This is acceptable and simpler than inventing separate manual-vs-automatic result types; the message is still true when the user later opens Settings.
 
@@ -111,10 +111,10 @@ The release candidate must survive until installer launch is positively acknowle
 Current behavior clears it immediately after `hostActions.enqueue()`. 2.4.1 changes that rule:
 
 - staging in progress continues to use the existing `installation` promise guard;
-- after staging, a `pendingLaunch` record owns `{ actionId, release, stagingDir }` until acknowledgement or timeout;
+- after staging, a `pendingLaunch` record owns `{ actionId, release, stagingDir }` until acknowledgement; a timeout removes only an action that is still queued;
 - while `installation`, `pendingLaunch`, or acknowledged `installing` state is active, another install must not start and a forced check must not fetch or replace candidate metadata;
 - on positive launch acknowledgement, the service enters `installing`; the old process is expected to be replaced shortly, so no further updater operation is accepted from that process;
-- on negative acknowledgement or timeout, staged files are removed, `pendingLaunch` is cleared, the candidate remains available, and the user may retry. A retry may download/stage again rather than introducing staging reuse logic.
+- on negative acknowledgement, or timeout while the action is still queued, staged files are removed best-effort, `pendingLaunch` is cleared, the candidate remains available, and the user may retry. If the tray has already drained the action when the timeout expires, the staging directory and launch guard remain intact, check/install stay blocked, and a late exact acknowledgement is accepted rather than risking a second installer launch. A retry may download/stage again rather than introducing staging reuse logic.
 
 Use a native opaque action identifier such as `crypto.randomUUID()`; it is not user-visible and has no persistence requirement.
 
@@ -134,11 +134,11 @@ After validating the staging path, the tray host attempts the existing installer
 
 - If `Start-Process` succeeds, the tray immediately POSTs `{ actionId, ok: true }` to a fixed authenticated local updater endpoint.
 - If launch throws, the tray logs the detailed PowerShell error as today and POSTs `{ actionId, ok: false }`. The browser receives a generic user-safe retry message rather than raw system/path details.
-- If the action is drained but no acknowledgement reaches the backend within a short bounded period (recommended default: 15 seconds), the backend treats launch as unconfirmed and returns to `available` with a retry message.
+- If no acknowledgement reaches the backend within a short bounded period (recommended default: 15 seconds), the backend atomically removes an action that is still queued, then returns to `available` with a retry message. If the tray has already drained the action, the backend keeps the launch guard and staging directory, remains in a waiting `launching` state, and accepts only a late exact acknowledgement.
 
 The acknowledgement proves only that Windows accepted the installer process launch. The installer may then close the old backend/window as part of the normal upgrade.
 
-A stale or unknown `actionId` is rejected rather than mutating current updater state.
+A stale or unknown `actionId`, and a negative acknowledgement after success, are rejected rather than mutating current updater state. An exact duplicate positive acknowledgement for the acknowledged action is idempotent.
 
 ## HTTP contract
 
@@ -168,7 +168,7 @@ or:
 { "actionId": "<opaque id>", "ok": false }
 ```
 
-The endpoint delegates to the update service. Invalid shape, unknown IDs, duplicate/stale acknowledgements, or acknowledgements when no launch is pending are rejected with a client error and do not mutate the candidate.
+The endpoint delegates to the update service. Invalid shape, unknown IDs, stale acknowledgements, negative acknowledgements after success, or acknowledgements when no launch is pending are rejected with a client error and do not mutate the candidate. An exact duplicate positive acknowledgement for the acknowledged action returns the existing `installing` status.
 
 No path supplied by the tray is accepted by this endpoint.
 
@@ -184,7 +184,7 @@ No path supplied by the tray is accepted by this endpoint.
 ### Update button
 
 - shown and enabled only when `phase === "available"` and a candidate exists;
-- may use `Повторить обновление` when `status.error` represents a failed/unconfirmed launch;
+- may use `Повторить обновление` when `status.error` represents a failed launch or an unconfirmed launch whose action is still queued;
 - while downloading/launching, keep a stable visible status instead of making the update card visually collapse;
 - hidden/disabled after positive installer-launch acknowledgement.
 
@@ -206,8 +206,8 @@ The existing checked timestamp may follow it, but must not be the only evidence 
 - Missing expected ZIP/checksum asset: visible error, no install button.
 - download/checksum/extraction failure: candidate remains retryable and the failure is visible.
 - tray `Start-Process` failure: candidate remains retryable; detailed failure stays in `tray.log`; browser gets a generic launch-failed message.
-- acknowledgement timeout: candidate remains retryable; browser says launch could not be confirmed.
-- stale/duplicate acknowledgement: reject and preserve current state.
+- acknowledgement timeout while the action is still queued: candidate remains retryable; browser says launch could not be confirmed. After the tray drains the action, the browser remains in a blocked waiting state until restart or a late exact acknowledgement, rather than risking a second installer launch.
+- stale/unknown acknowledgement and a negative acknowledgement after success: reject and preserve current state; an exact duplicate positive acknowledgement after success is idempotent.
 
 No failure path may silently clear the only retryable candidate merely because an action was enqueued.
 
@@ -220,8 +220,9 @@ Add/adjust tests for:
 - successful no-update check publishes `phase === "current"`;
 - install staging publishes `launching`, retains the candidate, and queues exactly one action containing an `actionId`;
 - positive acknowledgement advances to `installing`;
+- exact duplicate positive acknowledgement while `installing` is idempotent; wrong IDs and late negatives are rejected;
 - negative acknowledgement returns to `available`, preserves candidate, and permits retry;
-- acknowledgement timeout returns to `available` and permits retry;
+- acknowledgement timeout removes a still-queued action and permits retry; a drained-action timeout stays blocked and accepts a late exact acknowledgement;
 - stale/wrong `actionId` is rejected without changing status;
 - check and second-install attempts remain blocked while launch acknowledgement is pending;
 - existing install→check and check→install interleaving coverage remains green.
@@ -311,7 +312,7 @@ Keep one final coherent Terra whole-branch review only if both boundaries are de
 - the UI visibly distinguishes checking, downloading/verifying, launching, and installer-started states;
 - backend state does not claim installer launch merely because an action was queued;
 - tray launch success/failure is acknowledged to the backend with an opaque action ID;
-- failed/unconfirmed launch restores a retryable candidate and visible error;
+- failed launch, or unconfirmed launch while its action is still queued, restores a retryable candidate and visible error; a drained unconfirmed action remains blocked until restart or a late exact acknowledgement;
 - pending launch blocks conflicting check/install operations;
 - SHA-256 verification and existing installer/data-preservation behavior remain unchanged;
 - focused tests, full `npm test`, Windows packaging, `git diff --check`, and Windows CI pass before publication;

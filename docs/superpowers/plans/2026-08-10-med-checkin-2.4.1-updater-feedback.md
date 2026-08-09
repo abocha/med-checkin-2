@@ -21,7 +21,7 @@
 - Do not persist updater jobs or add a helper service/process.
 - `phase` is authoritative for browser presentation.
 - A queued host action is not proof of installer launch.
-- A failed or unconfirmed installer launch leaves the candidate retryable.
+- A failed installer launch, or an unconfirmed launch whose action is still queued, leaves the candidate retryable. A drained unconfirmed action remains blocked until restart or a late exact acknowledgement.
 - Preserve Windows script encoding contracts: bootstrap scripts including `windows/install.ps1` stay ASCII-safe CRLF; `windows/tray-host.ps1` stays UTF-8 with BOM.
 - Run focused tests, then the cheap full `npm test` gate before expensive review.
 - Do not automatically exercise destructive updater behavior against the user’s real data.
@@ -165,7 +165,7 @@ test('stale installer acknowledgement cannot mutate updater state', async () => 
 ```
 
 ```js
-test('unacknowledged installer launch times out to a retryable candidate', async () => {
+test('queued unacknowledged installer launch times out to a retryable candidate', async () => {
   const f = fixture({ launchAckTimeoutMs: 10 });
   try {
     await f.service.check({ force: true });
@@ -176,6 +176,7 @@ test('unacknowledged installer launch times out to a retryable candidate', async
     assert.equal(status.phase, 'available');
     assert.equal(status.availableVersion, '2.3.1');
     assert.ok(status.error);
+    assert.equal(f.actions.size, 0);
   } finally { f.close(); }
 });
 ```
@@ -241,14 +242,23 @@ hostActions.enqueue({ type: 'install-update', actionId, stagingDir });
 
 const timer = setTimeout(() => {
   if (pendingLaunch?.actionId !== actionId) return;
-  rmSync(stagingDir, { recursive: true, force: true });
-  pendingLaunch = null;
-  publish({
-    phase: 'available',
-    availableVersion: release.version,
-    releaseNotes: release.releaseNotes,
-    error: 'Installer launch could not be confirmed. Try the update again.'
-  });
+  if (hostActions.removeByActionId(actionId)) {
+    cleanupStaging(stagingDir);
+    pendingLaunch = null;
+    publish({
+      phase: 'available',
+      availableVersion: release.version,
+      releaseNotes: release.releaseNotes,
+      error: 'Installer launch could not be confirmed. Try the update again.'
+    });
+  } else {
+    publish({
+      phase: 'launching',
+      availableVersion: release.version,
+      releaseNotes: release.releaseNotes,
+      error: 'Installer launch acknowledgement was not received. Waiting for the installer to restart the application.'
+    });
+  }
 }, launchAckTimeoutMs);
 timer.unref?.();
 
@@ -283,6 +293,10 @@ Implement exact acknowledgement identity:
 
 ```js
 function reportInstallLaunch({ actionId, ok }) {
+  if (pendingLaunch?.acknowledged) {
+    if (actionId === pendingLaunch.actionId && ok === true) return getStatus();
+    throw new TypeError('Invalid or stale update launch acknowledgement');
+  }
   if (!pendingLaunch
       || typeof actionId !== 'string'
       || actionId !== pendingLaunch.actionId
@@ -292,10 +306,10 @@ function reportInstallLaunch({ actionId, ok }) {
 
   const { release, stagingDir, timer } = pendingLaunch;
   clearTimeout(timer);
-  pendingLaunch = null;
 
   if (!ok) {
-    rmSync(stagingDir, { recursive: true, force: true });
+    pendingLaunch = null;
+    cleanupStaging(stagingDir);
     return publish({
       phase: 'available',
       availableVersion: release.version,
@@ -304,6 +318,7 @@ function reportInstallLaunch({ actionId, ok }) {
     });
   }
 
+  pendingLaunch = { ...pendingLaunch, acknowledged: true };
   return publish({
     phase: 'installing',
     availableVersion: release.version,
@@ -710,8 +725,9 @@ Change the heading to `MED CHECK-IN 2.4.1` and replace only the updater section 
 Установка запускается только после явного нажатия «Обновить». Во время подготовки
 приложение показывает этапы загрузки/проверки и запуска установщика. ZIP-файл
 сверяется с опубликованной SHA-256-суммой до запуска установщика. Если запуск
-установщика не удаётся или не подтверждается, обновление остаётся доступным для
-повторной попытки.
+установщика не удаётся, обновление остаётся доступным для повторной попытки. Если
+трей уже получил действие, но подтверждение запуска задерживается, приложение
+ждёт автоматического перезапуска и не запускает второй установщик.
 
 Обычное обновление сохраняет %LOCALAPPDATA%\MedCheckin2, включая базу, резервные
 копии, настройки и черновики.

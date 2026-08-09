@@ -51,11 +51,12 @@ export function defaultExtractArchive(archivePath, destination) {
 
 export function createUpdateService({
   installedVersion, dataDir, hostActions, fetchImpl = fetch, now = () => new Date(),
-  extractArchive = defaultExtractArchive, onStatus = () => {}, launchAckTimeoutMs = 15000
+  extractArchive = defaultExtractArchive, onStatus = () => {}, launchAckTimeoutMs = 15000,
+  removeStaging = (stagingDir) => rmSync(stagingDir, { recursive: true, force: true })
 }) {
   const installed = parseStableVersion(installedVersion);
   if (!installed) throw new Error('Installed version must be a stable semantic version');
-  if (!dataDir || !hostActions?.enqueue) throw new Error('Update service requires dataDir and hostActions');
+  if (!dataDir || !hostActions?.enqueue || !hostActions?.removeByActionId) throw new Error('Update service requires dataDir and hostActions');
 
   let candidate = null;
   let installation = null;
@@ -67,6 +68,11 @@ export function createUpdateService({
     status = { ...status, ...next };
     onStatus(status);
     return status;
+  }
+
+  function cleanupStaging(stagingDir) {
+    if (!stagingDir) return;
+    try { removeStaging(stagingDir); } catch {}
   }
 
   function isDue() {
@@ -140,20 +146,29 @@ export function createUpdateService({
         hostActions.enqueue({ type: 'install-update', actionId, stagingDir });
         const timer = setTimeout(() => {
           if (pendingLaunch?.actionId !== actionId) return;
-          rmSync(stagingDir, { recursive: true, force: true });
-          pendingLaunch = null;
-          publish({
-            phase: 'available',
-            availableVersion: release.version,
-            releaseNotes: release.releaseNotes,
-            error: 'Installer launch could not be confirmed. Try the update again.'
-          });
+          if (hostActions.removeByActionId(actionId)) {
+            cleanupStaging(stagingDir);
+            pendingLaunch = null;
+            publish({
+              phase: 'available',
+              availableVersion: release.version,
+              releaseNotes: release.releaseNotes,
+              error: 'Installer launch could not be confirmed. Try the update again.'
+            });
+          } else {
+            publish({
+              phase: 'launching',
+              availableVersion: release.version,
+              releaseNotes: release.releaseNotes,
+              error: 'Installer launch acknowledgement was not received. Waiting for the installer to restart the application.'
+            });
+          }
         }, launchAckTimeoutMs);
         timer.unref?.();
         pendingLaunch = { actionId, release, stagingDir, timer };
         return publish({ phase: 'launching', availableVersion: release.version, releaseNotes: release.releaseNotes, error: null });
       } catch (error) {
-        if (stagingDir) rmSync(stagingDir, { recursive: true, force: true });
+        cleanupStaging(stagingDir);
         publish({ phase: 'available', error: error instanceof Error ? error.message : 'Update preparation failed' });
         throw error;
       }
@@ -163,6 +178,10 @@ export function createUpdateService({
   }
 
   function reportInstallLaunch({ actionId, ok }) {
+    if (pendingLaunch?.acknowledged) {
+      if (actionId === pendingLaunch.actionId && ok === true) return getStatus();
+      throw new TypeError('Invalid or stale update launch acknowledgement');
+    }
     if (!pendingLaunch
         || typeof actionId !== 'string'
         || actionId !== pendingLaunch.actionId
@@ -171,9 +190,9 @@ export function createUpdateService({
     }
     const { release, stagingDir, timer } = pendingLaunch;
     clearTimeout(timer);
-    pendingLaunch = null;
     if (!ok) {
-      rmSync(stagingDir, { recursive: true, force: true });
+      pendingLaunch = null;
+      cleanupStaging(stagingDir);
       return publish({
         phase: 'available',
         availableVersion: release.version,
@@ -181,6 +200,7 @@ export function createUpdateService({
         error: 'Could not start the update installer. Try again.'
       });
     }
+    pendingLaunch = { ...pendingLaunch, acknowledged: true };
     return publish({
       phase: 'installing',
       availableVersion: release.version,

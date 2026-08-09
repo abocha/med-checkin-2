@@ -225,13 +225,21 @@ function Handle-Poll([object]$Response) {
 
         Start-UpdateInstaller ([string]$action.stagingDir)
 
-        try {
-          Invoke-Api -Method 'POST' -Path '/api/v1/updates/install-launch-result' -Body @{
-            actionId = $actionId
-            ok = $true
-          } | Out-Null
-        } catch {
-          Write-TrayLog ('Could not acknowledge verified update installer launch: ' + $_.Exception.Message)
+        $acknowledged = $false
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+          try {
+            Invoke-Api -Method 'POST' -Path '/api/v1/updates/install-launch-result' -Body @{
+              actionId = $actionId
+              ok = $true
+            } | Out-Null
+            $acknowledged = $true
+            break
+          } catch {
+            if ($attempt -lt 3) { Start-Sleep -Milliseconds 250 }
+          }
+        }
+        if (-not $acknowledged) {
+          Write-TrayLog 'Could not acknowledge verified update installer launch after retries.'
         }
       } catch {
         Write-TrayLog ('Could not start verified update installer: ' + $_.Exception.Message)

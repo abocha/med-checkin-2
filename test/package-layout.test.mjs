@@ -335,13 +335,20 @@ test('updater handoff constructs an installer only inside the validated temporar
 
 test('tray host acknowledges verified installer launch without exposing staging paths', () => {
   const script = readFileSync(join(root, 'windows/tray-host.ps1'), 'utf8');
-  const installBranch = script.slice(script.indexOf("} elseif ([string]$action.type -eq 'install-update')"), script.indexOf('\n    }\n  }\n\n  if ($Response.due)', script.indexOf("} elseif ([string]$action.type -eq 'install-update')")));
+  const start = script.indexOf("} elseif ([string]$action.type -eq 'install-update')");
+  const end = script.indexOf('\r\n  }\r\n\r\n  if ($Response.due)', start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const installBranch = script.slice(start, end);
   for (const required of ['/api/v1/updates/install-launch-result', 'actionId', 'ok = $true', 'ok = $false', 'Start-UpdateInstaller']) {
     assert.ok(installBranch.includes(required), `install-update branch is missing ${required}`);
   }
   const acknowledgements = installBranch.match(/Invoke-Api -Method 'POST'[\s\S]*?\} \| Out-Null/g) ?? [];
   assert.ok(acknowledgements.length >= 2);
   for (const acknowledgement of acknowledgements) assert.doesNotMatch(acknowledgement, /stagingDir/i);
+  assert.equal((installBranch.match(/Start-UpdateInstaller/g) ?? []).length, 1);
+  assert.match(installBranch, /for \(\$attempt = 1; \$attempt -le 3; \$attempt\+\+\)/);
+  assert.match(installBranch, /Start-Sleep -Milliseconds 250/);
 });
 
 test('installer reuses only the exact app-owned Node runtime and otherwise retains verified download fallback', () => {

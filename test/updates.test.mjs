@@ -31,7 +31,7 @@ function release(version = '2.3.1', assets = true) {
   };
 }
 
-function fixture({ metadata = release(), zip = archive, sha = `${checksum}  med-checkin-2.3.1-windows-installer.zip\n`, extractor, now = new Date('2026-08-09T00:00:00Z'), launchAckTimeoutMs } = {}) {
+function fixture({ metadata = release(), zip = archive, sha = `${checksum}  med-checkin-2.3.1-windows-installer.zip\n`, extractor, now = new Date('2026-08-09T00:00:00Z'), launchAckTimeoutMs, removeStaging } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), 'med-checkin-updates-data-'));
   const actions = createHostActionQueue();
   const requested = [];
@@ -44,7 +44,7 @@ function fixture({ metadata = release(), zip = archive, sha = `${checksum}  med-
   };
   const service = createUpdateService({
     installedVersion: '2.3.0', dataDir, hostActions: actions, fetchImpl,
-    now: () => now, launchAckTimeoutMs,
+    now: () => now, launchAckTimeoutMs, removeStaging,
     extractArchive: extractor ?? ((source, destination) => {
       mkdirSync(join(destination, 'MedCheckin2'), { recursive: true });
       writeFileSync(join(destination, 'MedCheckin2', 'INSTALL.bat'), 'installer');
@@ -133,6 +133,21 @@ test('queues exactly one verified staging directory and waits for launch acknowl
   } finally { f.close(); }
 });
 
+test('installer launch acknowledgement accepts only a duplicate positive result for the same action', async () => {
+  const f = fixture();
+  try {
+    await f.service.check({ force: true });
+    await f.service.installAvailable();
+    const [action] = f.actions.drain();
+    const installing = f.service.reportInstallLaunch({ actionId: action.actionId, ok: true });
+    assert.deepEqual(f.service.reportInstallLaunch({ actionId: action.actionId, ok: true }), installing);
+    assert.throws(() => f.service.reportInstallLaunch({ actionId: 'other-action', ok: true }), /action|launch/i);
+    assert.throws(() => f.service.reportInstallLaunch({ actionId: action.actionId, ok: false }), /action|launch/i);
+    assert.deepEqual(f.service.getStatus(), installing);
+    rmSync(action.stagingDir, { recursive: true, force: true });
+  } finally { f.close(); }
+});
+
 test('failed installer launch restores the candidate and permits retry', async () => {
   const f = fixture();
   try {
@@ -180,7 +195,7 @@ test('stale installer acknowledgement cannot mutate updater state', async () => 
   } finally { f.close(); }
 });
 
-test('unacknowledged installer launch times out to a retryable candidate', async () => {
+test('queued installer launch timeout removes the action and permits retry', async () => {
   const f = fixture({ launchAckTimeoutMs: 10 });
   try {
     await f.service.check({ force: true });
@@ -190,6 +205,51 @@ test('unacknowledged installer launch times out to a retryable candidate', async
     assert.equal(status.phase, 'available');
     assert.equal(status.availableVersion, '2.3.1');
     assert.ok(status.error);
+    assert.equal(f.actions.size, 0);
+    const retry = await f.service.installAvailable();
+    assert.equal(retry.phase, 'launching');
+    const [retryAction] = f.actions.drain();
+    f.service.reportInstallLaunch({ actionId: retryAction.actionId, ok: false });
+  } finally { f.close(); }
+});
+
+test('drained installer launch timeout blocks retry and accepts a late acknowledgement', async () => {
+  const f = fixture({ launchAckTimeoutMs: 10 });
+  try {
+    await f.service.check({ force: true });
+    await f.service.installAvailable();
+    const [action] = f.actions.drain();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const status = f.service.getStatus();
+    assert.equal(status.phase, 'launching');
+    assert.match(status.error, /waiting for the installer to restart/i);
+    const requestsBefore = f.requested.length;
+    await f.service.check({ force: true });
+    assert.equal(f.requested.length, requestsBefore);
+    await assert.rejects(f.service.installAvailable(), /already|launch|install/i);
+    assert.equal(f.service.reportInstallLaunch({ actionId: action.actionId, ok: true }).phase, 'installing');
+    rmSync(action.stagingDir, { recursive: true, force: true });
+  } finally { f.close(); }
+});
+
+test('staging cleanup failure cannot strand a queued launch timeout', async () => {
+  let cleanupCalls = 0;
+  const f = fixture({
+    launchAckTimeoutMs: 10,
+    removeStaging() { cleanupCalls += 1; throw new Error('locked staging directory'); }
+  });
+  try {
+    await f.service.check({ force: true });
+    await f.service.installAvailable();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(cleanupCalls, 1);
+    assert.equal(f.actions.size, 0);
+    assert.equal(f.service.getStatus().phase, 'available');
+    const retry = await f.service.installAvailable();
+    assert.equal(retry.phase, 'launching');
+    const [action] = f.actions.drain();
+    f.service.reportInstallLaunch({ actionId: action.actionId, ok: true });
+    rmSync(action.stagingDir, { recursive: true, force: true });
   } finally { f.close(); }
 });
 
