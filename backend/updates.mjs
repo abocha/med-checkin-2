@@ -153,14 +153,14 @@ export function createUpdateService({
               phase: 'available',
               availableVersion: release.version,
               releaseNotes: release.releaseNotes,
-              error: 'Installer launch could not be confirmed. Try the update again.'
+              error: 'Не удалось подтвердить запуск установщика. Попробуйте обновление ещё раз.'
             });
           } else {
             publish({
               phase: 'launching',
               availableVersion: release.version,
               releaseNotes: release.releaseNotes,
-              error: 'Installer launch acknowledgement was not received. Waiting for the installer to restart the application.'
+              error: 'Подтверждение запуска установщика не получено. Ожидаем перезапуска приложения установщиком.'
             });
           }
         }, launchAckTimeoutMs);
@@ -197,7 +197,7 @@ export function createUpdateService({
         phase: 'available',
         availableVersion: release.version,
         releaseNotes: release.releaseNotes,
-        error: 'Could not start the update installer. Try again.'
+        error: 'Не удалось запустить установщик обновления. Попробуйте ещё раз.'
       });
     }
     pendingLaunch = { ...pendingLaunch, acknowledged: true };

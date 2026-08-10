@@ -42,8 +42,17 @@ test('updatePresentation describes transitional updater phases', () => {
 });
 
 test('updatePresentation keeps a failed available update retryable', () => {
-  const presentation = loadPresentation()({ phase: 'available', availableVersion: '2.4.1', error: 'launch failed' });
+  const error = 'Не удалось запустить установщик обновления. Попробуйте ещё раз.';
+  const presentation = loadPresentation()({ phase: 'available', availableVersion: '2.4.1', error });
   assert.equal(presentation.showInstall, true);
   assert.equal(presentation.installDisabled, false);
-  assert.equal(presentation.statusText, 'launch failed');
+  assert.equal(presentation.statusText, error);
+});
+
+test('updatePresentation shows the drained launch waiting state in Russian', () => {
+  const error = 'Подтверждение запуска установщика не получено. Ожидаем перезапуска приложения установщиком.';
+  const presentation = loadPresentation()({ phase: 'launching', availableVersion: '2.4.1', error });
+  assert.equal(presentation.showInstall, false);
+  assert.equal(presentation.checkDisabled, true);
+  assert.equal(presentation.statusText, error);
 });

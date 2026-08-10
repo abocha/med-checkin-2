@@ -157,7 +157,7 @@ test('failed installer launch restores the candidate and permits retry', async (
     const failed = f.service.reportInstallLaunch({ actionId: action.actionId, ok: false });
     assert.equal(failed.phase, 'available');
     assert.equal(failed.availableVersion, '2.3.1');
-    assert.ok(failed.error);
+    assert.equal(failed.error, 'Не удалось запустить установщик обновления. Попробуйте ещё раз.');
     const retry = await f.service.installAvailable();
     assert.equal(retry.phase, 'launching');
     const [retryAction] = f.actions.drain();
@@ -204,7 +204,7 @@ test('queued installer launch timeout removes the action and permits retry', asy
     const status = f.service.getStatus();
     assert.equal(status.phase, 'available');
     assert.equal(status.availableVersion, '2.3.1');
-    assert.ok(status.error);
+    assert.equal(status.error, 'Не удалось подтвердить запуск установщика. Попробуйте обновление ещё раз.');
     assert.equal(f.actions.size, 0);
     const retry = await f.service.installAvailable();
     assert.equal(retry.phase, 'launching');
@@ -222,7 +222,7 @@ test('drained installer launch timeout blocks retry and accepts a late acknowled
     await new Promise((resolve) => setTimeout(resolve, 25));
     const status = f.service.getStatus();
     assert.equal(status.phase, 'launching');
-    assert.match(status.error, /waiting for the installer to restart/i);
+    assert.equal(status.error, 'Подтверждение запуска установщика не получено. Ожидаем перезапуска приложения установщиком.');
     const requestsBefore = f.requested.length;
     await f.service.check({ force: true });
     assert.equal(f.requested.length, requestsBefore);
