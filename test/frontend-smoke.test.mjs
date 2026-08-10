@@ -29,6 +29,19 @@ test('frontend exposes dynamic scale/trend containers and tracked-item groups', 
   assert.doesNotMatch(html, /value=["']caffeine["']/);
 });
 
+test('frontend renders updater phases through stable controls', () => {
+  for (const id of ['update-status', 'installed-version', 'update-notes', 'check-updates', 'install-update', 'update-available']) {
+    assert.match(html, new RegExp(`id=["']${id}["']`));
+  }
+  assert.match(html, /<title>Med Check-in 2\.4\.1<\/title>/);
+  assert.match(js, /function updatePresentation\(update\)/);
+  for (const phase of ['checking', 'current', 'available', 'downloading', 'launching', 'installing']) assert.match(js, new RegExp(`case '${phase}'`));
+  assert.match(js, /У вас установлена последняя версия/);
+  assert.match(js, /Установщик запущен/);
+  assert.match(js, /const hasAvailableUpdate = update\.phase === 'available'/);
+  assert.doesNotMatch(js, /renderUpdates\(\); toast\(['"]Подготовка обновления/);
+});
+
 test('frontend exposes semantic Day, Evening, Extra, missed-entry, and draft-recovery controls', () => {
   for (const id of ['day-checkin', 'evening-checkin', 'extra-checkin', 'use-previous-values', 'add-missed-checkin']) {
     assert.match(html, new RegExp(`id=["']${id}["']`));

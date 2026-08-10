@@ -217,8 +217,43 @@ function Handle-Poll([object]$Response) {
     } elseif ([string]$action.type -eq 'open-data-folder') {
       Start-Process -FilePath 'explorer.exe' -ArgumentList @([string]$action.path) | Out-Null
     } elseif ([string]$action.type -eq 'install-update') {
-      try { Start-UpdateInstaller ([string]$action.stagingDir) }
-      catch { Write-TrayLog ('Could not start verified update installer: ' + $_.Exception.Message) }
+      $actionId = [string]$action.actionId
+      try {
+        if ([string]::IsNullOrWhiteSpace($actionId)) {
+          throw 'Update launch action is missing its action id.'
+        }
+
+        Start-UpdateInstaller ([string]$action.stagingDir)
+
+        $acknowledged = $false
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+          try {
+            Invoke-Api -Method 'POST' -Path '/api/v1/updates/install-launch-result' -Body @{
+              actionId = $actionId
+              ok = $true
+            } | Out-Null
+            $acknowledged = $true
+            break
+          } catch {
+            if ($attempt -lt 3) { Start-Sleep -Milliseconds 250 }
+          }
+        }
+        if (-not $acknowledged) {
+          Write-TrayLog 'Could not acknowledge verified update installer launch after retries.'
+        }
+      } catch {
+        Write-TrayLog ('Could not start verified update installer: ' + $_.Exception.Message)
+        if (-not [string]::IsNullOrWhiteSpace($actionId)) {
+          try {
+            Invoke-Api -Method 'POST' -Path '/api/v1/updates/install-launch-result' -Body @{
+              actionId = $actionId
+              ok = $false
+            } | Out-Null
+          } catch {
+            Write-TrayLog ('Could not report verified update installer launch failure: ' + $_.Exception.Message)
+          }
+        }
+      }
     }
   }
 
@@ -252,8 +287,8 @@ function Poll-Backend {
   try {
     if (-not (Load-Runtime)) { return }
     $response = Invoke-Api -Method 'GET' -Path '/api/v1/host/poll'
-    Invoke-Api -Method 'POST' -Path '/api/v1/control/heartbeat' -Body @{} | Out-Null
     Handle-Poll $response
+    Invoke-Api -Method 'POST' -Path '/api/v1/control/heartbeat' -Body @{} | Out-Null
   } catch {
     $now = [datetime]::UtcNow
     if (($now - $script:LastPollErrorAt).TotalSeconds -ge 60) {

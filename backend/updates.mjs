@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -51,15 +51,17 @@ export function defaultExtractArchive(archivePath, destination) {
 
 export function createUpdateService({
   installedVersion, dataDir, hostActions, fetchImpl = fetch, now = () => new Date(),
-  extractArchive = defaultExtractArchive, onStatus = () => {}
+  extractArchive = defaultExtractArchive, onStatus = () => {}, launchAckTimeoutMs = 15000,
+  removeStaging = (stagingDir) => rmSync(stagingDir, { recursive: true, force: true })
 }) {
   const installed = parseStableVersion(installedVersion);
   if (!installed) throw new Error('Installed version must be a stable semantic version');
-  if (!dataDir || !hostActions?.enqueue) throw new Error('Update service requires dataDir and hostActions');
+  if (!dataDir || !hostActions?.enqueue || !hostActions?.removeByActionId) throw new Error('Update service requires dataDir and hostActions');
 
   let candidate = null;
   let installation = null;
   let checking = null;
+  let pendingLaunch = null;
   let status = { installedVersion: installed.raw, phase: 'idle', lastCheckedAt: readLastCheckedAt(dataDir), availableVersion: null, releaseNotes: null, error: null };
 
   function publish(next) {
@@ -68,13 +70,18 @@ export function createUpdateService({
     return status;
   }
 
+  function cleanupStaging(stagingDir) {
+    if (!stagingDir) return;
+    try { removeStaging(stagingDir); } catch {}
+  }
+
   function isDue() {
     if (!status.lastCheckedAt) return true;
     return now().getTime() - new Date(status.lastCheckedAt).getTime() >= CHECK_INTERVAL_MS;
   }
 
   function check({ force = false } = {}) {
-    if (installation) return Promise.resolve(getStatus());
+    if (installation || pendingLaunch || status.phase === 'installing') return Promise.resolve(getStatus());
     if (checking) return checking;
     if (!force && !isDue()) return Promise.resolve(getStatus());
     const run = (async () => {
@@ -89,7 +96,7 @@ export function createUpdateService({
         candidate = null;
 
         if (!version || version.parts[0] !== installed.parts[0] || compareVersions(version, installed) <= 0) {
-          return publish({ phase: 'idle', lastCheckedAt: checkedAt, availableVersion: null, releaseNotes: null, error: null });
+          return publish({ phase: 'current', lastCheckedAt: checkedAt, availableVersion: null, releaseNotes: null, error: null });
         }
 
         const zipName = `med-checkin-${version.raw}-windows-installer.zip`;
@@ -112,7 +119,7 @@ export function createUpdateService({
   }
 
   async function installAvailable() {
-    if (installation) throw new Error('Update installation is already being prepared.');
+    if (installation || pendingLaunch || status.phase === 'installing') throw new Error('Update installation is already being prepared or launched.');
     if (checking) throw new Error('Update check is already in progress.');
     if (!candidate) throw new Error('No update is available. Check for updates first.');
     const release = candidate;
@@ -135,11 +142,33 @@ export function createUpdateService({
         writeFileSync(archivePath, archive);
         extractArchive(archivePath, stagingDir);
         if (!existsSync(join(stagingDir, 'MedCheckin2', 'INSTALL.bat'))) throw new Error('Verified update archive is missing its installer.');
-        hostActions.enqueue({ type: 'install-update', stagingDir });
-        if (candidate === release) candidate = null;
-        return publish({ phase: 'installing', availableVersion: candidate?.version ?? null, releaseNotes: candidate?.releaseNotes ?? null, error: null });
+        const actionId = randomUUID();
+        hostActions.enqueue({ type: 'install-update', actionId, stagingDir });
+        const timer = setTimeout(() => {
+          if (pendingLaunch?.actionId !== actionId) return;
+          if (hostActions.removeByActionId(actionId)) {
+            cleanupStaging(stagingDir);
+            pendingLaunch = null;
+            publish({
+              phase: 'available',
+              availableVersion: release.version,
+              releaseNotes: release.releaseNotes,
+              error: 'Не удалось подтвердить запуск установщика. Попробуйте обновление ещё раз.'
+            });
+          } else {
+            publish({
+              phase: 'launching',
+              availableVersion: release.version,
+              releaseNotes: release.releaseNotes,
+              error: 'Подтверждение запуска установщика не получено. Ожидаем перезапуска приложения установщиком.'
+            });
+          }
+        }, launchAckTimeoutMs);
+        timer.unref?.();
+        pendingLaunch = { actionId, release, stagingDir, timer };
+        return publish({ phase: 'launching', availableVersion: release.version, releaseNotes: release.releaseNotes, error: null });
       } catch (error) {
-        if (stagingDir) rmSync(stagingDir, { recursive: true, force: true });
+        cleanupStaging(stagingDir);
         publish({ phase: 'available', error: error instanceof Error ? error.message : 'Update preparation failed' });
         throw error;
       }
@@ -148,8 +177,40 @@ export function createUpdateService({
     finally { installation = null; }
   }
 
+  function reportInstallLaunch({ actionId, ok }) {
+    if (pendingLaunch?.acknowledged) {
+      if (actionId === pendingLaunch.actionId && ok === true) return getStatus();
+      throw new TypeError('Invalid or stale update launch acknowledgement');
+    }
+    if (!pendingLaunch
+        || typeof actionId !== 'string'
+        || actionId !== pendingLaunch.actionId
+        || typeof ok !== 'boolean') {
+      throw new TypeError('Invalid or stale update launch acknowledgement');
+    }
+    const { release, stagingDir, timer } = pendingLaunch;
+    clearTimeout(timer);
+    if (!ok) {
+      pendingLaunch = null;
+      cleanupStaging(stagingDir);
+      return publish({
+        phase: 'available',
+        availableVersion: release.version,
+        releaseNotes: release.releaseNotes,
+        error: 'Не удалось запустить установщик обновления. Попробуйте ещё раз.'
+      });
+    }
+    pendingLaunch = { ...pendingLaunch, acknowledged: true };
+    return publish({
+      phase: 'installing',
+      availableVersion: release.version,
+      releaseNotes: release.releaseNotes,
+      error: null
+    });
+  }
+
   function getStatus() { return { ...status }; }
-  return { getStatus, check, installAvailable };
+  return { getStatus, check, installAvailable, reportInstallLaunch };
 }
 
 export const UPDATE_CHECK_INTERVAL_MS = CHECK_INTERVAL_MS;

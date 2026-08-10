@@ -27,3 +27,16 @@ test('host action queue bounds retained actions and clones values', () => {
     { type: 'close-window' }
   ]);
 });
+
+test('host action queue removes only the queued action with an exact action id', () => {
+  const queue = createHostActionQueue();
+  queue.enqueue({ type: 'open', view: 'history' });
+  queue.enqueue({ type: 'install-update', actionId: 'launch-1', stagingDir: 'C:\\temp\\one' });
+  queue.enqueue({ type: 'install-update', actionId: 'launch-2', stagingDir: 'C:\\temp\\two' });
+  assert.equal(queue.removeByActionId('launch-1'), true);
+  assert.equal(queue.removeByActionId('launch-1'), false);
+  assert.deepEqual(queue.drain(), [
+    { type: 'open', view: 'history' },
+    { type: 'install-update', actionId: 'launch-2', stagingDir: 'C:\\temp\\two' }
+  ]);
+});

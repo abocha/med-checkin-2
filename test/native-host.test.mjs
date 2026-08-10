@@ -30,6 +30,19 @@ test('tray host polls authenticated backend and handles open and close actions',
   assert.match(source, /BalloonTipClicked/);
 });
 
+test('tray host handles a received poll response before heartbeat failure can abort it', () => {
+  const source = readFileSync(sourceUrl, 'utf8');
+  const start = source.indexOf('function Poll-Backend');
+  const end = source.indexOf('\r\nfunction Snooze-Current', start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const pollBackend = source.slice(start, end);
+  const poll = pollBackend.indexOf("Invoke-Api -Method 'GET' -Path '/api/v1/host/poll'");
+  const handle = pollBackend.indexOf('Handle-Poll $response');
+  const heartbeat = pollBackend.indexOf("Invoke-Api -Method 'POST' -Path '/api/v1/control/heartbeat'");
+  assert.ok(poll > -1 && handle > poll && heartbeat > handle);
+});
+
 test('tray host launches Edge app mode with a dedicated profile and browser fallback', () => {
   const source = readFileSync(sourceUrl, 'utf8');
   assert.match(source, /--app=/);

@@ -240,6 +240,32 @@ test('API exposes server-owned update status and never accepts browser download 
   } finally { await f.close(); }
 });
 
+test('API accepts only a fixed installer launch acknowledgement payload', async () => {
+  const acknowledgements = [];
+  const updateService = {
+    getStatus: () => ({ installedVersion: '2.4.0', phase: 'launching' }),
+    reportInstallLaunch(value) {
+      acknowledgements.push(value);
+      return { installedVersion: '2.4.0', phase: 'installing' };
+    }
+  };
+  const f = await fixture({ updateService });
+  try {
+    let response = await api(f.base, '/api/v1/updates/install-launch-result', {
+      method: 'POST', body: JSON.stringify({ actionId: 'action-1', ok: true })
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(acknowledgements, [{ actionId: 'action-1', ok: true }]);
+    assert.equal((await response.json()).phase, 'installing');
+
+    for (const body of [{ ok: true }, { actionId: '', ok: true }, { actionId: 'action-1', ok: 'true' }, { actionId: 'action-1', ok: true, stagingDir: 'C:\\attacker' }]) {
+      response = await api(f.base, '/api/v1/updates/install-launch-result', { method: 'POST', body: JSON.stringify(body) });
+      assert.equal(response.status, 400);
+    }
+    assert.deepEqual(acknowledgements, [{ actionId: 'action-1', ok: true }]);
+  } finally { await f.close(); }
+});
+
 test('API bootstraps and mutates tracked items through authenticated routes', async () => {
   let persisted = 0;
   const f = await fixture({ onPersisted: async () => { persisted += 1; } });

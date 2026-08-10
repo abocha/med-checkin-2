@@ -219,13 +219,13 @@ test('shortcuts invoke the hidden launcher rather than a UI executable', () => {
   assert.doesNotMatch(script, /MedCheckinTray\.exe/);
 });
 
-test('release-visible Windows labels track 2.4 without renaming stable scheduled tasks', () => {
+test('release-visible Windows labels track 2.4.1 without renaming stable scheduled tasks', () => {
   const script = readFileSync(join(root, 'windows/install.ps1'), 'utf8');
   const tray = readFileSync(join(root, 'windows/tray-host.ps1'), 'utf8');
   const uninstall = readFileSync(join(root, 'windows/uninstall.ps1'), 'utf8');
   const readme = readFileSync(join(root, 'README.txt'), 'utf8');
-  assert.match(script, /\$AppName = 'Med Check-in 2\.4\.0'/);
-  assert.match(script, /Med Check-in 2\.4\.0 installation diagnostics/);
+  assert.match(script, /\$AppName = 'Med Check-in 2\.4\.1'/);
+  assert.match(script, /Med Check-in 2\.4\.1 installation diagnostics/);
   assert.match(script, /\$shortcut\.Description = 'Med Check-in 2\.4'/);
   assert.match(script, /'Med Check-in 2\.4\.lnk'/);
   assert.match(readme, /«Med Check-in 2\.4»/);
@@ -267,22 +267,22 @@ test('installer health check avoids culture-dependent runtime timestamp string r
   assert.match(script, /\(\[datetime\]\$runtime\.hostHeartbeatAt\)\.ToUniversalTime\(\)/);
 });
 
-test('release metadata and verifier target Med Check-in 2.4.0 without a personal static regimen', () => {
+test('release metadata and verifier target Med Check-in 2.4.1 without a personal static regimen', () => {
   const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
   const packageLock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
   const packageScript = readFileSync(join(root, 'scripts/package-windows.mjs'), 'utf8');
   const verifierScript = readFileSync(join(root, 'scripts/verify-release.mjs'), 'utf8');
   const ui = readFileSync(join(root, 'resources/index.html'), 'utf8');
-  assert.equal(packageJson.version, '2.4.0');
-  assert.equal(packageLock.version, '2.4.0');
-  assert.equal(packageLock.packages[''].version, '2.4.0');
+  assert.equal(packageJson.version, '2.4.1');
+  assert.equal(packageLock.version, '2.4.1');
+  assert.equal(packageLock.packages[''].version, '2.4.1');
   assert.match(packageJson.scripts['package:windows'], /package-windows\.mjs/);
-  assert.match(packageScript, /med-checkin-2\.4\.0-windows-installer\.zip/);
+  assert.match(packageScript, /med-checkin-2\.4\.1-windows-installer\.zip/);
   assert.match(packageScript, /VERSION\.txt/);
-  assert.match(packageScript, /2\.4\.0/);
+  assert.match(packageScript, /2\.4\.1/);
   assert.match(packageScript, /verify-release\.mjs/);
-  assert.match(verifierScript, /2\.4\.0/);
-  assert.match(ui, /<title>Med Check-in 2\.4\.0<\/title>/);
+  assert.match(verifierScript, /2\.4\.1/);
+  assert.match(ui, /<title>Med Check-in 2\.4\.1<\/title>/);
   assert.match(ui, /<h1>Med Check-in <span>2\.4<\/span><\/h1>/);
   assert.match(ui, /id="medication-label"[^>]*>Лечение не указано<\/p>/);
   assert.doesNotMatch(ui, /Эсциталопрам/);
@@ -331,6 +331,24 @@ test('updater handoff constructs an installer only inside the validated temporar
   assert.match(script, /MedCheckin2-update-/);
   assert.match(script, /MedCheckin2\\INSTALL\.bat/);
   assert.doesNotMatch(script, /action\.installerPath|action\.url|action\.command/i);
+});
+
+test('tray host acknowledges verified installer launch without exposing staging paths', () => {
+  const script = readFileSync(join(root, 'windows/tray-host.ps1'), 'utf8');
+  const start = script.indexOf("} elseif ([string]$action.type -eq 'install-update')");
+  const end = script.indexOf('\r\n  }\r\n\r\n  if ($Response.due)', start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const installBranch = script.slice(start, end);
+  for (const required of ['/api/v1/updates/install-launch-result', 'actionId', 'ok = $true', 'ok = $false', 'Start-UpdateInstaller']) {
+    assert.ok(installBranch.includes(required), `install-update branch is missing ${required}`);
+  }
+  const acknowledgements = installBranch.match(/Invoke-Api -Method 'POST'[\s\S]*?\} \| Out-Null/g) ?? [];
+  assert.ok(acknowledgements.length >= 2);
+  for (const acknowledgement of acknowledgements) assert.doesNotMatch(acknowledgement, /stagingDir/i);
+  assert.equal((installBranch.match(/Start-UpdateInstaller/g) ?? []).length, 1);
+  assert.match(installBranch, /for \(\$attempt = 1; \$attempt -le 3; \$attempt\+\+\)/);
+  assert.match(installBranch, /Start-Sleep -Milliseconds 250/);
 });
 
 test('installer reuses only the exact app-owned Node runtime and otherwise retains verified download fallback', () => {
