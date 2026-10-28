@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Med Check-in 2.4.1</title>
+  <title>Med Check-in 2.5.0</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -12,7 +12,7 @@
     <header class="app-header">
       <div>
         <p class="eyebrow">личный журнал состояния</p>
-        <h1>Med Check-in <span>2.4</span></h1>
+        <h1>Med Check-in <span>2.5</span></h1>
         <p id="medication-label" class="medication-label">Лечение не указано</p>
       </div>
       <div class="header-status">
@@ -74,6 +74,19 @@
             <div class="button-row scale-actions"><button type="button" class="secondary" id="use-previous-values">Использовать предыдущие значения</button><span id="scale-guidance" class="muted">0 — совсем нет / хуже всего · 10 — максимально / лучше всего</span></div>
 
             <div id="scale-inputs" class="scale-grid"></div>
+          </section>
+
+          <section class="card emotional-impact-card" aria-labelledby="emotional-impact-heading">
+            <div class="section-heading"><div><h3 id="emotional-impact-heading">Эмоции и действия</h3><p>За сегодняшний день к моменту отметки · необязательно</p></div></div>
+            <label for="emotional-impact-status">Насколько неприятные эмоции сегодня мешали делать то, что ты хотел или считал важным?</label>
+            <select id="emotional-impact-status" aria-describedby="emotional-impact-help">
+              <option value="">Не оценено</option><option value="none">Неприятных эмоций не было</option><option value="rated">Были — оценить помеху действиям</option>
+            </select>
+            <div id="emotional-impact-rating" hidden>
+              <label class="scale unset" for="emotional-impact-value">Помеха действиям <output for="emotional-impact-value">—</output><input id="emotional-impact-value" type="range" min="0" max="10" step="1" value="5" disabled aria-describedby="emotional-impact-anchors"></label>
+              <p id="emotional-impact-anchors" class="muted">0 — не мешали, даже если требовались усилия или паузы · 5 — часть важных дел пришлось отложить или сократить · 10 — практически полностью помешали заниматься важным</p>
+            </div>
+            <p id="emotional-impact-help" class="muted">Отдых и сознательная смена планов сами по себе не означают помеху. Если оценить влияние не получилось, оставь «Не оценено». Это личное наблюдение, не валидированная клиническая шкала.</p>
           </section>
 
           <section class="card observation-card">
@@ -140,6 +153,7 @@
         <div id="analytics-kpis" class="kpi-grid"></div>
         <section id="completion-stats" class="card"></section>
         <section class="card chart-card"><div class="section-heading"><div><h3>Основные показатели</h3><p>Ежедневные средние и трёхдневное сглаживание.</p></div></div><div id="trend-fields" class="trend-fields" role="group" aria-label="Показатели графика"></div><div id="trend-chart" class="chart"></div></section>
+        <section class="card chart-card"><div class="section-heading"><div><h3>Эмоции и действия</h3><p>Вечерние оценки помехи за день, без сглаживания. Меньше — эмоции меньше мешали действиям. Изменения балла сами по себе не доказывают улучшения саморегуляции.</p></div></div><p id="emotional-impact-summary" class="muted"></p><div id="emotional-impact-chart" class="chart"></div></section>
         <div class="two-column">
           <section class="card"><h3>Днём и вечером</h3><div id="paired-comparison"></div></section>
           <section class="card"><h3>Частые отметки</h3><div id="frequency-chart"></div></section>

@@ -99,8 +99,12 @@ export function rowsToCsv(rows, scaleDefinitions = []) {
   ];
   const represented = new Set(rows.flatMap((row) => Object.keys(row.scales ?? {})));
   const definitions = (scaleDefinitions ?? []).filter((definition) => represented.has(definition.id));
-  const headers = [...fields, ...definitions.map((definition) => definition.label)];
-  return [headers.map(csvEscape).join(','), ...rows.map((row) => [...fields.map((field) => csvEscape(row[field])), ...definitions.map((definition) => csvEscape(row.scales?.[definition.id] ?? ''))].join(','))].join('\r\n');
+  const headers = [...fields, ...definitions.map((definition) => definition.label), 'emotionalImpactStatus', 'emotionalImpactValue'];
+  return [headers.map(csvEscape).join(','), ...rows.map((row) => [
+    ...fields.map((field) => csvEscape(row[field])),
+    ...definitions.map((definition) => csvEscape(row.scales?.[definition.id] ?? '')),
+    csvEscape(row.emotionalImpact?.status), csvEscape(row.emotionalImpact?.status === 'rated' ? row.emotionalImpact.value : null)
+  ].join(','))].join('\r\n');
 }
 
 function safeSettings(input, current) {

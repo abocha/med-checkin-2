@@ -37,6 +37,27 @@ function orderedDefinitionsForIds(ids = []) {
     .sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
 }
 function currentRenderedScaleIds() { return $$('input[type="range"]').map(input => input.name).filter(Boolean); }
+function emotionalImpactValue() {
+  const status = $('#emotional-impact-status')?.value;
+  if (status === 'none') return { status: 'none' };
+  if (status !== 'rated') return null;
+  const input = $('#emotional-impact-value');
+  return { status: 'rated', value: input?.dataset.chosen === 'true' ? Number(input.value) : null };
+}
+function setEmotionalImpact(impact) {
+  const status = $('#emotional-impact-status');
+  const input = $('#emotional-impact-value');
+  if (!status || !input) return;
+  status.value = ['none', 'rated'].includes(impact?.status) ? impact.status : '';
+  input.disabled = status.value !== 'rated';
+  $('#emotional-impact-rating').hidden = input.disabled;
+  input.value = 5;
+  setScale(input, status.value === 'rated' ? impact.value : null);
+}
+function emotionalImpactText(impact) {
+  return impact?.status === 'rated' ? `Помеха эмоций: ${round(impact.value)} / 10`
+    : impact?.status === 'none' ? 'Неприятных эмоций не было' : 'Влияние эмоций: не оценено';
+}
 function clearScaleValue(event) {
   const id = event.currentTarget.dataset.scaleClear;
   const form = $('#checkin-form');
@@ -200,6 +221,7 @@ function buildDraftFlagValues(values = {}, staleFlags = []) {
 if (globalThis.__MED_CHECKIN_TEST__) {
   globalThis.__MED_CHECKIN_TEST__.updatePresentation = updatePresentation;
   globalThis.__MED_CHECKIN_TEST__.draftLifecycle = { state, restoreDraft, persistDraft, validForSave, discardDraft, markDirty, normalizeDraftScaleState, findStaleDraftScaleIds, renderScaleInputs, applyScaleDefinitions };
+  globalThis.__MED_CHECKIN_TEST__.emotionalImpact = { emotionalImpactValue, setEmotionalImpact, emotionalImpactText, draftValues, formPayload, fillForm, usePreviousValues };
 }
 
 function renderTrackedItems(selected = currentFlagSelections()) {
@@ -347,6 +369,7 @@ function resetForm({ kind = 'scheduled', period = 'day', date = localDate(), sch
   state.suppressDirty = true;
   renderTrackedItems({ context: [], symptoms: [], activation: [] });
   form.reset();
+  setEmotionalImpact(null);
   state.currentKind = kind;
   state.currentPeriod = kind === 'scheduled' ? period : null;
   state.currentDate = date;
@@ -394,6 +417,7 @@ function fillForm(record) {
     if (form.elements[name] && !Array.isArray(value) && !(name in (record.scales || {}))) form.elements[name].value = value ?? '';
   }
   setFlags('context', record.context); setFlags('symptoms', record.symptoms); setFlags('activation', record.activation);
+  setEmotionalImpact(record.emotionalImpact);
   state.dirty = false;
   $('#edit-state').textContent = 'Редактирование';
   $('#save-status').textContent = `Сохранено ${new Date(record.updatedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`;
@@ -408,6 +432,7 @@ function draftValues() {
   values.scaleSnapshot = currentRenderedScaleIds();
   values.scales = Object.fromEntries(currentRenderedScaleIds().filter(name => form.elements[name]?.dataset.chosen === 'true').map(name => [name, Number(form.elements[name].value)]));
   values.scalesChosen = Object.fromEntries(currentRenderedScaleIds().map(name => [name, form.elements[name]?.dataset.chosen === 'true']));
+  values.emotionalImpact = emotionalImpactValue();
   return values;
 }
 
@@ -448,6 +473,7 @@ function restoreDraft(draft) {
   state.staleDraftScaleIds = findStaleDraftScaleIds(draft.values);
   state.restoredDraftScaleSnapshot = normalized.scaleSnapshot;
   setFlags('context', draft.values.context); setFlags('symptoms', draft.values.symptoms); setFlags('activation', draft.values.activation);
+  setEmotionalImpact(draft.values.emotionalImpact);
   state.suppressDirty = false;
   state.dirty = true;
   $('#save-status').textContent = 'Восстановлен черновик';
@@ -519,10 +545,12 @@ function formPayload() {
   payload.nightSleepHours = payload.nightSleepHours === '' ? null : Number(payload.nightSleepHours);
   payload.daySleepHours = payload.daySleepHours === '' ? null : Number(payload.daySleepHours);
   payload.context = selectedFlags('context'); payload.symptoms = selectedFlags('symptoms'); payload.activation = selectedFlags('activation');
+  payload.emotionalImpact = emotionalImpactValue();
   return payload;
 }
 
 function validForSave(payload) {
+  if (payload.emotionalImpact?.status === 'rated' && !Number.isFinite(payload.emotionalImpact.value)) { toast('Выбери оценку помехи эмоций от 0 до 10 или оставь «Не оценено».'); return false; }
   if (state.staleDraftFlags.length || state.staleDraftScaleIds.length) { toast('Отбрось черновик с неизвестными отметками и начни запись заново.'); return false; }
   if (payload.kind === 'scheduled' && currentRenderedScaleIds().some(name => payload.scales?.[name] === undefined)) {
     toast('Для запланированного чек-ина выбери все шкалы.');
@@ -543,7 +571,7 @@ function validForSave(payload) {
     const legacyScaleMeaningful = !payload.scales && Object.entries(payload).some(([key, value]) => !['id', 'localDate', 'period', 'kind', 'scheduledFor', 'observedAt', 'observedAtLocal', 'nightSleepHours', 'daySleepHours'].includes(key) && Number.isFinite(Number(value)));
     const meaningful = Object.keys(payload.scales || {}).length > 0 || legacyScaleMeaningful
       || payload.nightSleepHours !== null || payload.daySleepHours !== null || payload.sleepStart || payload.wakeTime
-      || payload.context.length || payload.symptoms.length || payload.activation.length || payload.notes.trim() || payload.redFlags.trim();
+      || payload.context.length || payload.symptoms.length || payload.activation.length || payload.notes.trim() || payload.redFlags.trim() || payload.emotionalImpact != null;
     if (!meaningful) { toast('Добавь хотя бы одно наблюдение в дополнительную запись.'); return false; }
   }
   return true;
@@ -667,7 +695,7 @@ function renderHistory() {
   if (!state.historyItems.length) { list.innerHTML = '<div class="empty">Пока нет записей по этому фильтру.</div>'; return; }
   list.innerHTML = state.historyItems.map(item => `<article class="history-item">
     <div class="history-date">${escapeHtml(niceDate(item.localDate))}<small>${item.kind === 'extra' ? 'Дополнительная запись' : `${periodLabel(item.period)}${item.scheduledFor ? ` · запланировано ${formatStoredTime(item.scheduledFor)}` : ''}`}</small></div>
-    <div><div class="metric-chips">${Object.entries(item.scales || {}).map(([key, value]) => { const definition = scaleDefinitionMap().get(key); return `<span class="metric-chip">${escapeHtml(definition?.label || `${key} (архивная)`)} <b>${round(value)}</b></span>`; }).join('')}</div>${item.notes ? `<p class="muted" style="margin-top:8px">${escapeHtml(item.notes.slice(0, 180))}</p>` : ''}<div class="record-timing">${timingLines(item)}</div></div>
+    <div><div class="metric-chips">${Object.entries(item.scales || {}).map(([key, value]) => { const definition = scaleDefinitionMap().get(key); return `<span class="metric-chip">${escapeHtml(definition?.label || `${key} (архивная)`)} <b>${round(value)}</b></span>`; }).join('')}<span class="metric-chip">${escapeHtml(emotionalImpactText(item.emotionalImpact))}</span></div>${item.notes ? `<p class="muted" style="margin-top:8px">${escapeHtml(item.notes.slice(0, 180))}</p>` : ''}<div class="record-timing">${timingLines(item)}</div></div>
     <div class="button-row"><button type="button" class="secondary" data-edit-id="${item.id}">Открыть</button><button type="button" class="ghost" data-delete-id="${item.id}">Удалить</button></div>
   </article>`).join('');
   $$('[data-edit-id]').forEach(button => button.addEventListener('click', async () => { const record = await api(`/api/v1/checkins/${button.dataset.editId}`); await openRecord(record); }));
@@ -705,6 +733,9 @@ function renderAnalytics(data) {
   const completion = data.completion;
   $('#completion-stats').innerHTML = `<h3>Выполнение расписания</h3><p class="muted">${completion.opportunities ? `${completion.completed} из ${completion.opportunities} прошедших или отмеченных заранее запланированных периодов (${round(completion.rate)}%)` : 'Пока нет прошедших запланированных периодов.'}</p>`;
   ChartLite.renderTrend($('#trend-chart'), data.daily, data.treatmentMarkers, state.selectedTrendFields, state.scaleDefinitions);
+  const impact = data.emotionalImpact || { daily: [], ratedCount: 0, noneCount: 0, mean: null };
+  $('#emotional-impact-summary').textContent = `Числовых ответов: ${impact.ratedCount} · Без неприятных эмоций: ${impact.noneCount} · Средняя помеха при наличии эмоций: ${round(impact.mean)}`;
+  ChartLite.renderEmotionalImpact($('#emotional-impact-chart'), impact.daily);
   const rows = state.scaleDefinitions.filter(definition => Object.hasOwn(data.pairedDelta || {}, definition.id) && Number.isFinite(data.pairedDelta[definition.id])).map(definition => ({ key: definition.id, label: definition.label }));
   $('#paired-comparison').innerHTML = rows.length ? `<p class="muted" style="margin-bottom:10px">Средняя разница «вечер минус день» только за даты, где оба значения каждой шкалы присутствуют.</p>${comparisonTable(rows, [{ label: 'Δ вечером', values: data.pairedDelta }])}` : '<div class="empty">Нужно несколько дней с обеими отметками.</div>';
   const frequencyItems = Object.entries({ ...data.frequencies.symptoms, ...data.frequencies.activation, ...data.frequencies.context }).map(([key, value]) => ({ label: state.trackedItems.find(item => item.id === key)?.label || key, value })).sort((a, b) => b.value - a.value).slice(0, 10);
@@ -873,6 +904,7 @@ async function bootstrap(runtime) {
 }
 function wireUi() {
   setRanges(); renderScaleSettings();
+  $('#emotional-impact-status').addEventListener('change', event => { setEmotionalImpact(event.target.value ? { status: event.target.value, value: null } : null); markDirty(); });
   $$('[data-trend-field]').forEach(input => input.addEventListener('change', () => {
     state.selectedTrendFields = selectedTrendFields();
     if (state.analyticsData) renderAnalytics(state.analyticsData);

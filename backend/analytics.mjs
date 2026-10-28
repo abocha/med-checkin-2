@@ -53,6 +53,21 @@ function completionStats(rows, settings, now) {
   return { completed: completedCount, opportunities, rate: opportunities ? Math.round(completedCount / opportunities * 10000) / 100 : null };
 }
 
+function emotionalImpactAnalytics(rows) {
+  const evening = rows.filter((row) => row.period === 'evening');
+  if (!rows.length) return { daily: [], ratedCount: 0, noneCount: 0, mean: null };
+  const byDate = new Map(evening.map((row) => [row.localDate, row]));
+  const firstDate = rows[0].localDate;
+  const lastDate = rows[rows.length - 1].localDate;
+  const daily = [];
+  for (let date = firstDate; date <= lastDate; date = dateOffset(date, 1)) {
+    const impact = byDate.get(date)?.emotionalImpact ?? null;
+    daily.push({ date, status: impact?.status ?? null, value: impact?.status === 'rated' ? impact.value : null });
+  }
+  const rated = daily.filter((item) => item.status === 'rated');
+  return { daily, ratedCount: rated.length, noneCount: daily.filter((item) => item.status === 'none').length, mean: average(rated.map((item) => item.value)) };
+}
+
 export function buildAnalytics(rows, settings = {}, { now = new Date(), treatmentEvents = [] } = {}) {
   const scheduled = rows
     .filter((row) => row.kind !== 'extra')
@@ -99,6 +114,7 @@ export function buildAnalytics(rows, settings = {}, { now = new Date(), treatmen
       activation: countFlags(ordered, 'activation')
     },
     completion: completionStats(ordered, settings, now),
+    emotionalImpact: emotionalImpactAnalytics(ordered),
     treatmentMarkers: treatmentEvents
       .filter((event) => event.effectiveDate)
       .map((event) => ({ id: event.id, effectiveDate: event.effectiveDate, note: event.note }))

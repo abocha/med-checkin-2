@@ -16,10 +16,10 @@ const legacyObservation = (overrides = {}) => ({ id: 10, kind: 'scheduled', peri
 const portableV1 = (overrides = {}) => ({ format: 'med-checkin-2', formatVersion: 1, exportedAt: '2026-08-07T01:02:03.000Z', observations: [legacyObservation()], treatmentEvents: [], settings, ...overrides });
 const portableV2 = (overrides = {}) => portableV1({ formatVersion: 2, trackedItems: BUILTIN_TRACKED_ITEMS.map((item) => ({ ...item })), ...overrides });
 
-test('backup validation accepts v3 and rejects incomplete/newer schemas', () => {
+test('backup validation accepts v4 and rejects incomplete/newer schemas', () => {
   const root = mkdtempSync(join(tmpdir(), 'med-checkin-maintenance-')); const dbPath = join(root, 'med-checkin.sqlite'); const backupDir = join(root, 'backups'); const repo = createRepository(dbPath);
   try {
-    const backup = createManualBackup({ repo, dbPath, backupDir, now: new Date('2026-08-07T01:02:03.000Z') }); assert.deepEqual(validateBackupFile(backup), { userVersion: 3 });
+    const backup = createManualBackup({ repo, dbPath, backupDir, now: new Date('2026-08-07T01:02:03.000Z') }); assert.deepEqual(validateBackupFile(backup), { userVersion: 4 });
     const incomplete = join(backupDir, 'manual-20260807T010204Z.sqlite'); const db = new DatabaseSync(incomplete); try { db.exec('PRAGMA user_version=3; CREATE TABLE checkins(id INTEGER);'); } finally { db.close(); }
     assert.throws(() => validateBackupFile(incomplete), /schema|incomplete/i);
     const newer = join(backupDir, 'manual-20260807T010205Z.sqlite'); writeFileSync(newer, 'not sqlite'); assert.throws(() => validateBackupFile(newer), /sqlite|database/i);
@@ -56,7 +56,7 @@ test('portable v3 validates definition and dynamic-scale integrity', () => {
   assert.throws(() => validatePortableImport({ ...payload, observations: [{ ...payload.observations[0], scales: {} }] }), /scales|required/i);
 });
 
-test('portable v3 round-trips custom archived definitions and Replace preserves reminders atomically', () => {
+test('portable v4 round-trips custom archived definitions and Replace preserves reminders atomically', () => {
   const root = mkdtempSync(join(tmpdir(), 'med-checkin-import-')); const dbPath = join(root, 'med-checkin.sqlite'); const backupDir = join(root, 'backups'); const repo = createRepository(dbPath);
   try {
     const custom = repo.createScaleDefinition({ label: 'Fog' });
@@ -64,7 +64,7 @@ test('portable v3 round-trips custom archived definitions and Replace preserves 
     const saved = repo.createCheckin({ kind: 'scheduled', period: 'day', localDate: '2026-08-01', observedAt: '2026-08-01T06:05:00.000Z', scales: values });
     repo.updateScaleDefinition(custom.id, { active: false }); repo.saveReminderState('2026-08-01', 'day', { dismissedAt: '2026-08-01T06:00:00.000Z' });
     const exported = buildPortableExport(repo, new Date('2026-08-07T01:02:03.000Z'));
-    assert.equal(exported.formatVersion, 3); assert.deepEqual(exported.scaleDefinitions, repo.listScaleDefinitions()); assert.deepEqual(exported.observations[0].scales, repo.getCheckinById(saved.id).scales);
+    assert.equal(exported.formatVersion, 4); assert.deepEqual(exported.scaleDefinitions, repo.listScaleDefinitions()); assert.deepEqual(exported.observations[0].scales, repo.getCheckinById(saved.id).scales);
     repo.createCheckin({ kind: 'extra', period: null, localDate: '2026-08-02', observedAt: '2026-08-02T08:00:00.000Z', scales: { mood: 2 } });
     const result = replacePortableData({ repo, dbPath, backupDir, payload: exported, now: new Date('2026-08-07T02:03:04.000Z') });
     assert.equal(existsSync(result.preImportBackupPath), true); assert.deepEqual(repo.listAllCheckins().map((item) => item.id), [saved.id]); assert.equal(repo.listScaleDefinitions().find((item) => item.id === custom.id).active, false); assert.equal(repo.getReminderStates('2026-08-01').day.dismissedAt, '2026-08-01T06:00:00.000Z');
@@ -72,7 +72,7 @@ test('portable v3 round-trips custom archived definitions and Replace preserves 
   } finally { repo.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
-test('restore validates before replacement and creates a recoverable v3 backup', () => {
+test('restore validates before replacement and creates a recoverable v4 backup', () => {
   const root = mkdtempSync(join(tmpdir(), 'med-checkin-restore-')); const dbPath = join(root, 'med-checkin.sqlite'); const backupDir = join(root, 'backups'); const repo = createRepository(dbPath);
   try {
     repo.createCheckin({ kind: 'scheduled', period: 'day', localDate: '2026-08-01', observedAt: '2026-08-01T06:05:00.000Z', scales: Object.fromEntries(repo.listScaleDefinitions().map((item) => [item.id, 5])) });

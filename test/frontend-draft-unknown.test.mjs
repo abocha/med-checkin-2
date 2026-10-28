@@ -18,6 +18,9 @@ function createHarness(definitions = builtins.map(([id, label], sortOrder) => ({
   const scaleRoot = { _html: '', _clearButtons: [], querySelector: () => null, querySelectorAll(selector) { return selector === '[data-scale-clear]' ? this._clearButtons : []; } };
   const form = { elements: { notes: { value: '' }, redFlags: { value: '' }, context: { value: '' }, symptoms: { value: '' }, activation: { value: '' } }, formValues: { notes: '', redFlags: '' } };
   const output = () => ({ value: '', textContent: '' });
+  const emotionStatus = { value: '' };
+  const emotionRating = { hidden: true };
+  const emotionInput = { value: '5', dataset: {}, disabled: true, parentElement: { classList: { toggle() {} }, querySelector: output } };
   function scaleInputs() { return Object.values(form.elements).filter(input => input.type === 'range'); }
   function makeScaleInput(name) {
     const input = { name, type: 'range', value: '1', dataset: {}, parentElement: { classList: { toggle() {} }, querySelector: output }, addEventListener() {} };
@@ -29,7 +32,7 @@ function createHarness(definitions = builtins.map(([id, label], sortOrder) => ({
     set(value) { this._html = value; for (const name of scaleInputs().map(input => input.name)) delete form.elements[name]; for (const name of [...value.matchAll(/name="([^"]+)"/g)].map(match => match[1])) makeScaleInput(name); this._clearButtons = [...value.matchAll(/data-scale-clear="([^"]+)"/g)].map(match => { const button = { dataset: { scaleClear: match[1] }, listener: null, addEventListener(type, listener) { if (type === 'click') this.listener = listener; }, click() { this.listener?.({ currentTarget: this }); } }; return button; }); }
   });
   const document = {
-    querySelector(selector) { if (selector === '#checkin-form') return form; if (selector === '#scale-inputs') return scaleRoot; if (selector === '#save-status') return status; if (selector === '#toast') return toast; return null; },
+    querySelector(selector) { if (selector === '#emotional-impact-status') return emotionStatus; if (selector === '#emotional-impact-value') return emotionInput; if (selector === '#emotional-impact-rating') return emotionRating; if (selector === '#checkin-form') return form; if (selector === '#scale-inputs') return scaleRoot; if (selector === '#save-status') return status; if (selector === '#toast') return toast; return null; },
     querySelectorAll(selector) {
       if (selector === 'input[type="range"]') return scaleInputs();
       const match = /^\[data-flag-group="(context|symptoms|activation)"\] input(?::checked)?$/.exec(selector);
@@ -48,12 +51,58 @@ function createHarness(definitions = builtins.map(([id, label], sortOrder) => ({
   context.globalThis = context;
   vm.runInNewContext(readFileSync(new URL('../resources/app.js', import.meta.url), 'utf8'), context);
   hook.draftLifecycle.state.scaleDefinitions = definitions;
-  return { lifecycle: hook.draftLifecycle, form, scaleRoot, scaleInputs, savedDrafts, status };
+  return { lifecycle: hook.draftLifecycle, emotion: hook.emotionalImpact, emotionInput, emotionStatus, emotionRating, context, form, scaleRoot, scaleInputs, savedDrafts, status };
 }
 
 function validExtraPayload(scales = { mood: 1 }) {
   return { kind: 'extra', scales, nightSleepHours: null, daySleepHours: null, sleepStart: '', wakeTime: '', context: [], symptoms: [], activation: [], notes: '', redFlags: '' };
 }
+
+test('emotional response keeps zero, no emotions and unanswered distinct through draft recovery', () => {
+  const h = createHarness();
+  h.lifecycle.state.currentKind = 'extra';
+  for (const impact of [null, { status: 'none' }, { status: 'rated', value: 0 }, { status: 'rated', value: 8 }]) {
+    h.emotion.setEmotionalImpact(impact);
+    const draft = h.emotion.draftValues();
+    h.emotion.setEmotionalImpact(null);
+    h.lifecycle.restoreDraft({ values: draft });
+    assert.equal(JSON.stringify(h.emotion.emotionalImpactValue()), JSON.stringify(impact));
+    assert.equal(h.emotionRating.hidden, impact?.status !== 'rated');
+  }
+  h.lifecycle.restoreDraft({ values: { notes: 'legacy draft' } });
+  assert.equal(h.emotion.emotionalImpactValue(), null);
+  assert.equal(h.emotionInput.disabled, true);
+});
+
+test('pending emotion rating survives draft recovery and blocks save without inventing a score', () => {
+  const h = createHarness();
+  h.emotion.setEmotionalImpact({ status: 'rated', value: null });
+  const values = h.emotion.draftValues();
+  h.lifecycle.restoreDraft({ values });
+  assert.equal(h.emotion.emotionalImpactValue().value, null);
+  assert.equal(h.lifecycle.validForSave({ ...validExtraPayload({}), emotionalImpact: h.emotion.emotionalImpactValue() }), false);
+  h.emotion.setEmotionalImpact({ status: 'rated', value: 0 });
+  assert.equal(h.lifecycle.validForSave({ ...validExtraPayload({}), emotionalImpact: h.emotion.emotionalImpactValue() }), true);
+  h.emotion.setEmotionalImpact({ status: 'none' });
+  assert.equal(h.emotionInput.dataset.chosen, undefined);
+  assert.equal(h.lifecycle.validForSave({ ...validExtraPayload({}), emotionalImpact: h.emotion.emotionalImpactValue() }), true);
+  h.emotion.setEmotionalImpact(null);
+  assert.equal(h.lifecycle.validForSave({ ...validExtraPayload({}), emotionalImpact: null }), false);
+});
+
+test('history labels distinguish zero from no emotions and previous values do not copy emotional response', async () => {
+  const h = createHarness();
+  assert.match(h.emotion.emotionalImpactText({ status: 'rated', value: 0 }), /0 \/ 10/);
+  assert.match(h.emotion.emotionalImpactText({ status: 'none' }), /эмоций не было/);
+  assert.match(h.emotion.emotionalImpactText(null), /не оценено/);
+  h.emotion.setEmotionalImpact({ status: 'rated', value: 0 });
+  h.context.fetch = async () => ({ ok: true, json: async () => ({ items: [{ id: 12, scales: {}, emotionalImpact: { status: 'rated', value: 9 } }] }) });
+  await h.emotion.usePreviousValues();
+  assert.equal(h.emotion.emotionalImpactValue().value, 0);
+  h.emotion.setEmotionalImpact(null);
+  await h.emotion.usePreviousValues();
+  assert.equal(h.emotion.emotionalImpactValue(), null);
+});
 
 test('2.3 fixed-field draft normalizes to the eight-ID snapshot without later definitions', () => {
   const harness = createHarness([...builtins, ['custom:new', 'Новая']].map(([id, label], sortOrder) => ({ id, label, active: true, sortOrder })));

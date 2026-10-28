@@ -154,6 +154,12 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .decision-dialog { max-width: 440px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); border-radius: 16px; padding: 22px; box-shadow: var(--shadow); }
 .decision-dialog::backdrop { background: rgba(20, 20, 18, .42); }
 .decision-dialog p { margin-bottom: 18px; }
+.emotional-impact-card > label { display: block; margin-bottom: 10px; font-weight: 600; }
+.emotional-impact-card > select { width: 100%; }
+.emotional-impact-card .scale { display: grid; grid-template-columns: 1fr auto; gap: 12px; margin: 18px 0 10px; }
+.emotional-impact-card input[type="range"] { grid-column: 1 / -1; width: 100%; }
+.emotional-impact-card .unset output { color: var(--muted); }
+.emotional-impact-card p.muted { margin-top: 12px; font-size: 13px; line-height: 1.6; }
 .empty { padding: 30px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 15px; }
 @media (max-width: 800px) {
   .scale-grid, .input-grid, .check-grid, .two-column, .observation-card, .history-filters, .treatment-medication, .maintenance-grid, .trend-fields { grid-template-columns: 1fr; }

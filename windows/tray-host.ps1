@@ -396,7 +396,7 @@ try {
   [void]$menu.Items.Add((New-MenuItem 'Выйти до следующего входа' { Quit-UntilLogon }))
 
   $script:NotifyIcon = New-Object -TypeName System.Windows.Forms.NotifyIcon
-  $script:NotifyIcon.Text = 'Med Check-in 2.4'
+  $script:NotifyIcon.Text = 'Med Check-in 2.5'
   $iconPath = Join-Path $AppRoot 'resources\icons\app.ico'
   if (Test-Path -LiteralPath $iconPath) {
     $script:Icon = New-Object -TypeName System.Drawing.Icon -ArgumentList $iconPath

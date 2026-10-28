@@ -11,8 +11,8 @@ import { createRepository } from '../backend/repository.mjs';
 const fixturePath = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'med-checkin-2.1.1.sqlite');
 const legacyScales = { mood: 7, anxiety: 2, irritability: 1, energy: 6, focus: 8, functioning: 8, sleep_quality: 6, appetite: 5 };
 
-function assertV3(dbPath, id = null) {
-  assert.equal(readUserVersion(dbPath), 3);
+function assertV4(dbPath, id = null) {
+  assert.equal(readUserVersion(dbPath), 4);
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
     const columns = db.prepare('PRAGMA table_info(checkins)').all().map((row) => row.name);
@@ -43,24 +43,24 @@ function buildV1OrV2(dbPath, version) {
   } finally { db.close(); }
 }
 
-test('prepareDatabase migrates schema 0 fixture directly to v3 with values and backup', () => {
+test('prepareDatabase migrates schema 0 fixture directly to v4 with values and backup', () => {
   const root = mkdtempSync(join(tmpdir(), 'med-checkin-migrate-')); const dbPath = join(root, 'med-checkin.sqlite'); const backupDir = join(root, 'backups'); copyFileSync(fixturePath, dbPath);
   try {
     const result = prepareDatabase({ dbPath, backupDir, now: new Date('2026-08-07T01:02:03.000Z'), log() {} });
-    assert.equal(result.migrated, true); assert.equal(existsSync(result.backupPath), true); assert.deepEqual(readdirSync(backupDir), ['pre-migration-20260807T010203Z.sqlite']); assertV3(dbPath, 41);
+    assert.equal(result.migrated, true); assert.equal(existsSync(result.backupPath), true); assert.deepEqual(readdirSync(backupDir), ['pre-migration-20260807T010203Z.sqlite']); assertV4(dbPath, 41);
     const repo = createRepository(dbPath); try { assert.equal(repo.getScheduledCheckin('2026-07-31', 'day').scales.mood, 7); } finally { repo.close(); }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-for (const version of [1, 2]) test(`prepareDatabase migrates schema ${version} directly to v3 and retains data`, () => {
+for (const version of [1, 2]) test(`prepareDatabase migrates schema ${version} directly to v4 and retains data`, () => {
   const root = mkdtempSync(join(tmpdir(), `med-checkin-v${version}-`)); const dbPath = join(root, 'med-checkin.sqlite'); const backupDir = join(root, 'backups'); buildV1OrV2(dbPath, version);
   try {
-    const result = prepareDatabase({ dbPath, backupDir, now: new Date('2026-08-07T01:02:03.000Z'), log() {} }); assert.equal(result.migrated, true); assertV3(dbPath, 41);
+    const result = prepareDatabase({ dbPath, backupDir, now: new Date('2026-08-07T01:02:03.000Z'), log() {} }); assert.equal(result.migrated, true); assertV4(dbPath, 41);
     const repo = createRepository(dbPath); try { if (version === 2) assert.deepEqual(repo.listTrackedItems().find((item) => item.id === 'custom:symptom'), { id: 'custom:symptom', category: 'symptoms', label: 'Custom symptom', active: false, sortOrder: 0 }); assert.throws(() => repo.createCheckin({ kind: 'scheduled', period: 'day', localDate: '2026-08-01', observedAt: '2026-08-01T07:00:00.000Z', scales: Object.fromEntries(repo.listScaleDefinitions().filter((item) => item.active).map((item) => [item.id, 5])) }), /unique|constraint/i); } finally { repo.close(); }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('prepareDatabase creates v3 directly for a clean install', () => {
+test('prepareDatabase creates v4 directly for a clean install', () => {
   const root = mkdtempSync(join(tmpdir(), 'med-checkin-clean-')); const dbPath = join(root, 'med-checkin.sqlite');
-  try { const result = prepareDatabase({ dbPath, backupDir: join(root, 'backups') }); assert.equal(result.migrated, false); assertV3(dbPath); } finally { rmSync(root, { recursive: true, force: true }); }
+  try { const result = prepareDatabase({ dbPath, backupDir: join(root, 'backups') }); assert.equal(result.migrated, false); assertV4(dbPath); } finally { rmSync(root, { recursive: true, force: true }); }
 });

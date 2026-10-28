@@ -1,7 +1,7 @@
 import { BUILTIN_TRACKED_ITEMS } from './tracked-items.mjs';
 import { BUILTIN_SCALE_DEFINITIONS } from './scales.mjs';
 
-export const LATEST_SCHEMA_VERSION = 3;
+export const LATEST_SCHEMA_VERSION = 4;
 
 export function createTrackedItemsSchema(db) {
   db.exec(`
@@ -60,6 +60,13 @@ export function createLatestSchema(db, { setUserVersion = true } = {}) {
       context_json TEXT NOT NULL DEFAULT '[]', symptoms_json TEXT NOT NULL DEFAULT '[]',
       activation_json TEXT NOT NULL DEFAULT '[]', notes TEXT NOT NULL DEFAULT '',
       red_flags TEXT NOT NULL DEFAULT '',
+      emotional_impact_status TEXT CHECK(emotional_impact_status IN ('none','rated') OR emotional_impact_status IS NULL),
+      emotional_impact_value REAL CHECK(emotional_impact_value IS NULL OR (emotional_impact_value >= 0 AND emotional_impact_value <= 10)),
+      CHECK(
+        (emotional_impact_status IS NULL AND emotional_impact_value IS NULL)
+        OR (emotional_impact_status IS 'none' AND emotional_impact_value IS NULL)
+        OR (emotional_impact_status IS 'rated' AND emotional_impact_value IS NOT NULL)
+      ),
       CHECK((kind='scheduled' AND period IS NOT NULL) OR (kind='extra' AND period IS NULL))
     ) STRICT;
     CREATE UNIQUE INDEX IF NOT EXISTS checkins_scheduled_identity

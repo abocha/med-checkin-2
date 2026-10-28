@@ -18,14 +18,18 @@ function rowToCheckin(row, scales) {
     scales, nightSleepHours: row.night_sleep_hours, daySleepHours: row.day_sleep_hours,
     sleepStart: row.sleep_start, wakeTime: row.wake_time, context: parseJson(row.context_json, []),
     symptoms: parseJson(row.symptoms_json, []), activation: parseJson(row.activation_json, []),
-    notes: row.notes ?? '', redFlags: row.red_flags ?? ''
+    notes: row.notes ?? '', redFlags: row.red_flags ?? '',
+    emotionalImpact: row.emotional_impact_status === 'rated'
+      ? { status: 'rated', value: row.emotional_impact_value }
+      : row.emotional_impact_status === 'none' ? { status: 'none' } : null
   };
 }
 function observationValues(checkin, recordedAt, updatedAt) {
   return [
     checkin.kind, checkin.localDate, checkin.period, checkin.scheduledFor, checkin.observedAt, recordedAt, updatedAt,
     checkin.nightSleepHours, checkin.daySleepHours, checkin.sleepStart, checkin.wakeTime,
-    JSON.stringify(checkin.context), JSON.stringify(checkin.symptoms), JSON.stringify(checkin.activation), checkin.notes, checkin.redFlags
+    JSON.stringify(checkin.context), JSON.stringify(checkin.symptoms), JSON.stringify(checkin.activation), checkin.notes, checkin.redFlags,
+    checkin.emotionalImpact?.status ?? null, checkin.emotionalImpact?.status === 'rated' ? checkin.emotionalImpact.value : null
   ];
 }
 
@@ -36,9 +40,9 @@ export function createRepository(dbPath) {
   const version = Number(db.prepare('PRAGMA user_version').get().user_version);
   if (version !== LATEST_SCHEMA_VERSION) { db.close(); throw new Error(`Database must be prepared before opening (schema version ${version})`); }
 
-  const insert = db.prepare(`INSERT INTO checkins(kind,local_date,period,scheduled_for,observed_at,recorded_at,updated_at,night_sleep_hours,day_sleep_hours,sleep_start,wake_time,context_json,symptoms_json,activation_json,notes,red_flags) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING *`);
-  const update = db.prepare(`UPDATE checkins SET kind=?,local_date=?,period=?,scheduled_for=?,observed_at=?,updated_at=?,night_sleep_hours=?,day_sleep_hours=?,sleep_start=?,wake_time=?,context_json=?,symptoms_json=?,activation_json=?,notes=?,red_flags=? WHERE id=? RETURNING *`);
-  const portableObservationInsert = db.prepare(`INSERT INTO checkins(id,kind,local_date,period,scheduled_for,observed_at,recorded_at,updated_at,night_sleep_hours,day_sleep_hours,sleep_start,wake_time,context_json,symptoms_json,activation_json,notes,red_flags) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const insert = db.prepare(`INSERT INTO checkins(kind,local_date,period,scheduled_for,observed_at,recorded_at,updated_at,night_sleep_hours,day_sleep_hours,sleep_start,wake_time,context_json,symptoms_json,activation_json,notes,red_flags,emotional_impact_status,emotional_impact_value) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING *`);
+  const update = db.prepare(`UPDATE checkins SET kind=?,local_date=?,period=?,scheduled_for=?,observed_at=?,updated_at=?,night_sleep_hours=?,day_sleep_hours=?,sleep_start=?,wake_time=?,context_json=?,symptoms_json=?,activation_json=?,notes=?,red_flags=?,emotional_impact_status=?,emotional_impact_value=? WHERE id=? RETURNING *`);
+  const portableObservationInsert = db.prepare(`INSERT INTO checkins(id,kind,local_date,period,scheduled_for,observed_at,recorded_at,updated_at,night_sleep_hours,day_sleep_hours,sleep_start,wake_time,context_json,symptoms_json,activation_json,notes,red_flags,emotional_impact_status,emotional_impact_value) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   const getScheduled = db.prepare("SELECT * FROM checkins WHERE kind='scheduled' AND local_date=? AND period=?");
   const getById = db.prepare('SELECT * FROM checkins WHERE id=?');
   const scaleValuesByCheckin = db.prepare('SELECT scale_id, value FROM checkin_scale_values WHERE checkin_id=? ORDER BY scale_id');

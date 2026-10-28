@@ -96,7 +96,7 @@ test('API exports, previews, and replaces only versioned portable data', async (
     let response = await api(f.base, '/api/v1/export.json');
     const exported = await response.json();
     assert.equal(exported.format, 'med-checkin-2');
-    assert.equal(exported.formatVersion, 3);
+    assert.equal(exported.formatVersion, 4);
     assert.equal(exported.observations.length, 1);
     assert.equal('remindersPausedUntil' in exported.settings, false);
 
@@ -366,7 +366,7 @@ test('browser UI requires a valid launch token and serves local assets', async (
     assert.match(response.headers.get('content-type'), /text\/html/);
     assert.match(response.headers.get('content-security-policy'), /default-src/);
     const html = await response.text();
-    assert.match(html, /Med Check-in 2\.4/);
+    assert.match(html, /Med Check-in 2\.5/);
     assert.doesNotMatch(html, /neutralino/i);
 
     response = await fetch(f.base + '/app/app.js');

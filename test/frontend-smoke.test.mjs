@@ -33,7 +33,7 @@ test('frontend renders updater phases through stable controls', () => {
   for (const id of ['update-status', 'installed-version', 'update-notes', 'check-updates', 'install-update', 'update-available']) {
     assert.match(html, new RegExp(`id=["']${id}["']`));
   }
-  assert.match(html, /<title>Med Check-in 2\.4\.1<\/title>/);
+  assert.match(html, /<title>Med Check-in 2\.5\.0<\/title>/);
   assert.match(js, /function updatePresentation\(update\)/);
   for (const phase of ['checking', 'current', 'available', 'downloading', 'launching', 'installing']) assert.match(js, new RegExp(`case '${phase}'`));
   assert.match(js, /У вас установлена последняя версия/);

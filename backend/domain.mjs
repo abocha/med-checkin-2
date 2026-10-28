@@ -32,6 +32,14 @@ function normalizeText(value, maxLength = 8000) {
   return String(value).trim().slice(0, maxLength);
 }
 
+function normalizeEmotionalImpact(value) {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Invalid emotionalImpact');
+  if (value.status === 'none' && Object.keys(value).length === 1) return { status: 'none' };
+  if (value.status === 'rated' && Object.keys(value).length === 2 && typeof value.value === 'number' && Number.isFinite(value.value) && value.value >= 0 && value.value <= 10) return { status: 'rated', value: value.value };
+  throw new TypeError('Invalid emotionalImpact');
+}
+
 function isLocalDate(value) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value ?? ''));
   if (!match) return false;
@@ -77,7 +85,8 @@ export function normalizeCheckin(input = {}, {
     symptoms: normalizeFlags(input.symptoms, trackedItems, 'symptoms'),
     activation: normalizeFlags(input.activation, trackedItems, 'activation'),
     notes: normalizeText(input.notes),
-    redFlags: normalizeText(input.redFlags)
+    redFlags: normalizeText(input.redFlags),
+    emotionalImpact: normalizeEmotionalImpact(input.emotionalImpact)
   };
 
   normalized.scales = normalizeScaleValues(input.scales ?? {}, scaleDefinitions, {
@@ -89,7 +98,7 @@ export function normalizeCheckin(input = {}, {
       || normalized.nightSleepHours !== null || normalized.daySleepHours !== null
       || normalized.sleepStart !== null || normalized.wakeTime !== null
       || normalized.context.length > 0 || normalized.symptoms.length > 0 || normalized.activation.length > 0
-      || normalized.notes.length > 0 || normalized.redFlags.length > 0;
+      || normalized.notes.length > 0 || normalized.redFlags.length > 0 || normalized.emotionalImpact !== null;
     if (!hasMeaningfulValue) throw new TypeError('Extra must contain at least one meaningful value');
   }
   return normalized;

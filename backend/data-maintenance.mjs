@@ -10,11 +10,12 @@ import { BUILTIN_TRACKED_ITEMS, validateTrackedItems } from './tracked-items.mjs
 import { BUILTIN_SCALE_DEFINITIONS, LEGACY_SCALE_COLUMNS, validateScaleDefinitions } from './scales.mjs';
 
 const PORTABLE_FORMAT = 'med-checkin-2';
-const PORTABLE_VERSION = 3;
+const PORTABLE_VERSION = 4;
 const PORTABLE_SETTINGS = ['dayTime', 'eveningTime', 'catchupHours', 'repeatMinutes'];
 const BACKUP_PATTERN = /^(?:med-checkin-(\d{4}-\d{2}-\d{2})|(?:manual|pre-migration|pre-restore|pre-import)-(\d{8}T\d{6}Z))\.sqlite$/;
 const LEGACY_CHECKIN_COLUMNS = ['id', 'kind', 'local_date', 'period', 'scheduled_for', 'observed_at', 'recorded_at', 'updated_at', 'mood', 'anxiety', 'irritability', 'energy', 'focus', 'functioning', 'sleep_quality', 'appetite', 'night_sleep_hours', 'day_sleep_hours', 'sleep_start', 'wake_time', 'context_json', 'symptoms_json', 'activation_json', 'notes', 'red_flags'];
 const V3_CHECKIN_COLUMNS = ['id', 'kind', 'local_date', 'period', 'scheduled_for', 'observed_at', 'recorded_at', 'updated_at', 'night_sleep_hours', 'day_sleep_hours', 'sleep_start', 'wake_time', 'context_json', 'symptoms_json', 'activation_json', 'notes', 'red_flags'];
+const V4_CHECKIN_COLUMNS = [...V3_CHECKIN_COLUMNS, 'emotional_impact_status', 'emotional_impact_value'];
 const BASE_TABLES = { settings: ['key', 'value_json'], reminder_state: ['local_date', 'period', 'snoozed_until', 'dismissed_at', 'notified_at'], treatment_events: ['id', 'effective_date', 'regimen_json', 'note', 'created_at', 'updated_at'] };
 const TRACKED_COLUMNS = ['id', 'category', 'label', 'active', 'sort_order'];
 const SCALE_COLUMNS = ['id', 'label', 'active', 'sort_order'];
@@ -29,6 +30,16 @@ function requireColumns(db, table, columns) { if (columns.some((column) => !tabl
 function validateV1Schema(db) { requireColumns(db, 'checkins', LEGACY_CHECKIN_COLUMNS); for (const [table, columns] of Object.entries(BASE_TABLES)) requireColumns(db, table, columns); }
 function validateV2Schema(db) { validateV1Schema(db); requireColumns(db, 'tracked_items', TRACKED_COLUMNS); }
 function validateV3Schema(db) { requireColumns(db, 'checkins', V3_CHECKIN_COLUMNS); for (const [table, columns] of Object.entries(BASE_TABLES)) requireColumns(db, table, columns); requireColumns(db, 'tracked_items', TRACKED_COLUMNS); requireColumns(db, 'scale_definitions', SCALE_COLUMNS); requireColumns(db, 'checkin_scale_values', SCALE_VALUE_COLUMNS); }
+function validateV4Schema(db) {
+  validateV3Schema(db);
+  requireColumns(db, 'checkins', V4_CHECKIN_COLUMNS);
+  const invalid = db.prepare(`SELECT 1 FROM checkins WHERE NOT (
+    (emotional_impact_status IS NULL AND emotional_impact_value IS NULL)
+    OR (emotional_impact_status IS 'none' AND emotional_impact_value IS NULL)
+    OR (emotional_impact_status IS 'rated' AND typeof(emotional_impact_value) IN ('integer','real') AND emotional_impact_value >= 0 AND emotional_impact_value <= 10)
+  ) LIMIT 1`).get();
+  if (invalid) throw new TypeError('Invalid emotional impact in SQLite backup');
+}
 
 export function validateBackupFile(path) {
   let db;
@@ -37,10 +48,10 @@ export function validateBackupFile(path) {
     if (Object.values(db.prepare('PRAGMA quick_check').get())[0] !== 'ok') throw new TypeError('SQLite integrity check failed');
     const userVersion = Number(db.prepare('PRAGMA user_version').get().user_version);
     if (userVersion > LATEST_SCHEMA_VERSION) throw new TypeError(`Backup uses newer schema version ${userVersion}`);
-    if (![0, 1, 2, 3].includes(userVersion)) throw new TypeError(`Unsupported schema version ${userVersion}`);
+    if (![0, 1, 2, 3, 4].includes(userVersion)) throw new TypeError(`Unsupported schema version ${userVersion}`);
     if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkins'").get()) throw new TypeError('Backup is not a recognized Med Check-in database');
     if (userVersion === 0 && !tableColumns(db, 'checkins').has('slot')) throw new TypeError('Unrecognized legacy Med Check-in schema');
-    if (userVersion === 1) validateV1Schema(db); if (userVersion === 2) validateV2Schema(db); if (userVersion === 3) validateV3Schema(db);
+    if (userVersion === 1) validateV1Schema(db); if (userVersion === 2) validateV2Schema(db); if (userVersion === 3) validateV3Schema(db); if (userVersion === 4) validateV4Schema(db);
     return { userVersion };
   } catch (error) { if (error instanceof TypeError) throw error; throw new TypeError(`Invalid SQLite backup: ${error.message}`); } finally { try { db?.close(); } catch {} }
 }
@@ -68,11 +79,14 @@ function validateTreatment(input, ids, identities) { if (!input || typeof input 
 function validateSettings(settings) { if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new TypeError('Invalid portable settings'); if (Object.keys(settings).sort().join('|') !== [...PORTABLE_SETTINGS].sort().join('|')) throw new TypeError('Portable settings must contain only the supported values'); if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(settings.dayTime) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(settings.eveningTime)) throw new TypeError('Invalid reminder time'); if (!Number.isFinite(settings.catchupHours) || settings.catchupHours < 1 || settings.catchupHours > 12) throw new TypeError('Invalid catchupHours'); if (!Number.isFinite(settings.repeatMinutes) || settings.repeatMinutes < 15 || settings.repeatMinutes > 240) throw new TypeError('Invalid repeatMinutes'); return Object.fromEntries(PORTABLE_SETTINGS.map((key) => [key, settings[key]])); }
 
 export function validatePortableImport(payload) {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload) || payload.format !== PORTABLE_FORMAT || ![1, 2, 3].includes(payload.formatVersion)) throw new TypeError('Invalid portable format');
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload) || payload.format !== PORTABLE_FORMAT || ![1, 2, 3, 4].includes(payload.formatVersion)) throw new TypeError('Invalid portable format');
   validTimestamp(payload.exportedAt, 'exportedAt'); if (!Array.isArray(payload.observations) || !Array.isArray(payload.treatmentEvents)) throw new TypeError('Invalid portable collections');
   const scaleDefinitions = payload.formatVersion < 3 ? BUILTIN_SCALE_DEFINITIONS.map((item) => ({ ...item })) : validateScaleDefinitions(payload.scaleDefinitions);
   const trackedItems = payload.formatVersion === 1 ? BUILTIN_TRACKED_ITEMS.map((item) => ({ ...item })) : validateTrackedItems(payload.trackedItems);
-  const observations = payload.observations.map((item) => payload.formatVersion < 3 ? normalizeLegacyObservation(item) : item);
+  const observations = payload.observations.map((item) => {
+    const normalized = payload.formatVersion < 3 ? normalizeLegacyObservation(item) : item;
+    return payload.formatVersion < 4 ? { ...normalized, emotionalImpact: null } : normalized;
+  });
   const observationIds = new Set(), scheduledIdentities = new Set(), treatmentIds = new Set(), treatmentIdentities = new Set();
   return { format: PORTABLE_FORMAT, formatVersion: payload.formatVersion, exportedAt: payload.exportedAt, scaleDefinitions, trackedItems, observations: observations.map((item) => validateObservation(item, observationIds, scheduledIdentities, trackedItems, scaleDefinitions)), treatmentEvents: payload.treatmentEvents.map((item) => validateTreatment(item, treatmentIds, treatmentIdentities)), settings: validateSettings(payload.settings) };
 }

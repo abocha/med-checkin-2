@@ -74,7 +74,7 @@ The app:
 
 ### Portable data
 
-Portable JSON is explicitly versioned. The current format is v3, while older supported formats are normalized during import.
+Portable JSON is explicitly versioned. The current format is v4, while older supported formats are normalized during import.
 
 Before an import can replace local state, the payload is validated for:
 

@@ -68,7 +68,7 @@ export function prepareDatabase({ dbPath, backupDir, now = new Date(), log = () 
   }
   const columns = tableColumns(initial, 'checkins');
   const isLegacyV0 = version === 0 && columns.has('slot');
-  if (!isLegacyV0 && ![1, 2].includes(version)) {
+  if (!isLegacyV0 && ![1, 2, 3].includes(version)) {
     initial.close();
     throw new Error('Unrecognized legacy database schema');
   }
@@ -79,6 +79,22 @@ export function prepareDatabase({ dbPath, backupDir, now = new Date(), log = () 
   db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   try {
     db.exec('BEGIN IMMEDIATE');
+    if (version === 3) {
+      db.exec(`
+        ALTER TABLE checkins ADD COLUMN emotional_impact_status TEXT
+          CHECK(emotional_impact_status IN ('none','rated') OR emotional_impact_status IS NULL);
+        ALTER TABLE checkins ADD COLUMN emotional_impact_value REAL
+          CHECK(
+            (emotional_impact_status IS NULL AND emotional_impact_value IS NULL)
+            OR (emotional_impact_status IS 'none' AND emotional_impact_value IS NULL)
+            OR (emotional_impact_status IS 'rated' AND emotional_impact_value IS NOT NULL AND emotional_impact_value >= 0 AND emotional_impact_value <= 10)
+          );
+        PRAGMA user_version = ${LATEST_SCHEMA_VERSION};
+      `);
+      db.exec('COMMIT');
+      log('info', 'Database migrated to schema version 4', { backupPath });
+      return { migrated: true, backupPath, version: LATEST_SCHEMA_VERSION };
+    }
     db.exec('DROP INDEX IF EXISTS checkins_scheduled_identity');
     db.exec('ALTER TABLE checkins RENAME TO checkins_legacy');
     if (isLegacyV0 && tableExists(db, 'reminder_state')) db.exec('ALTER TABLE reminder_state RENAME TO reminder_state_legacy');
@@ -102,7 +118,7 @@ export function prepareDatabase({ dbPath, backupDir, now = new Date(), log = () 
     db.exec('DROP TABLE checkins_legacy');
     db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION}`);
     db.exec('COMMIT');
-    log('info', 'Database migrated to schema version 3', { backupPath });
+    log('info', 'Database migrated to schema version 4', { backupPath });
     return { migrated: true, backupPath, version: LATEST_SCHEMA_VERSION };
   } catch (error) {
     try { db.exec('ROLLBACK'); } catch {}

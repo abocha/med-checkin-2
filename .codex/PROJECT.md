@@ -119,9 +119,10 @@ These are current behavior, not permission to redesign them silently.
 - Fresh databases contain no personal treatment history by default.
 - SQLite schema compatibility is migration-controlled; backup/restore validation must reject incomplete
   or newer incompatible schemas before replacing live data.
-- Scale values are stored relationally in SQLite schema v3; archiving affects new entries, not historical identity.
+- Scale values are stored relationally in SQLite schema v4; archiving affects new entries, not historical identity.
 - Portable JSON uses the `med-checkin-2` versioned format and explicit Replace import only. Current
-  format v3 carries scale and tracked-item definitions; v1/v2 remain accepted for compatibility. There is no Merge import.
+  format v4 carries scale and tracked-item definitions plus each observation's optional emotional impact;
+  v1/v2/v3 remain accepted as unanswered emotional impact for compatibility. There is no Merge import.
 - Restore and Replace import create recoverable pre-operation SQLite backups before destructive replacement.
 - Reminder transient state remains local and is not replaced by portable import.
 - Browser drafts are local state and must survive ordinary application upgrades. They preserve their
